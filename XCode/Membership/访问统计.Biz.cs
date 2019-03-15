@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using NewLife.Collections;
 using NewLife.Data;
@@ -68,12 +69,6 @@ namespace XCode.Membership
             // 过滤器 UserModule、TimeModule、IPModule
             Meta.Modules.Add<TimeModule>();
 
-            //// 单对象缓存从键
-            //var sc = Meta.SingleCache;
-            //if (sc.Expire < 20 * 60) sc.Expire = 20 * 60;
-            //sc.FindSlaveKeyMethod = k => FindByModel(GetModel(k), false);
-            //sc.GetSlaveKeyMethod = e => GetKey(e.ToModel());
-
 #if !DEBUG
             // 关闭SQL日志
             Meta.Session.Dal.Db.ShowSQL = false;
@@ -110,7 +105,6 @@ namespace XCode.Membership
         {
             if (model == null) return null;
 
-            //if (cache) return Meta.SingleCache.GetItemWithSlaveKey(GetKey(model)) as VisitStat;
             if (cache)
             {
                 if (_cache.FindMethod == null) _cache.FindMethod = m => FindByModel(m, false);
@@ -205,9 +199,14 @@ namespace XCode.Membership
             if (model.Cost > st.MaxCost) st.MaxCost = model.Cost;
 
             if (!model.Title.IsNullOrEmpty()) st.Title = model.Title;
-            st.Times++;
+            //st.Times++;
+            Interlocked.Increment(ref st._Times);
 
-            if (!model.Error.IsNullOrEmpty()) st.Error++;
+            if (!model.Error.IsNullOrEmpty())
+            {
+                //st.Error++;
+                Interlocked.Increment(ref st._Error);
+            }
 
             var user = model.User;
             var ip = model.IP;
@@ -217,12 +216,14 @@ namespace XCode.Membership
                 var ss = new HashSet<String>((st.Remark + "").Split(","));
                 if (!user.IsNullOrEmpty() && !ss.Contains(user))
                 {
-                    st.Users++;
+                    //st.Users++;
+                    Interlocked.Increment(ref st._Users);
                     ss.Add(user + "");
                 }
                 if (!ip.IsNullOrEmpty() && !ss.Contains(ip))
                 {
-                    st.IPs++;
+                    //st.IPs++;
+                    Interlocked.Increment(ref st._IPs);
                     ss.Add(ip);
                 }
                 // 如果超长，砍掉前面
@@ -248,39 +249,6 @@ namespace XCode.Membership
         #endregion
 
         #region 辅助
-        ///// <summary>实体转模型</summary>
-        ///// <returns></returns>
-        //public VisitStatModel ToModel()
-        //{
-        //    var model = new VisitStatModel
-        //    {
-        //        Page = Page,
-        //        Level = Level,
-        //        Time = Time,
-        //    };
-
-        //    return model;
-        //}
-
-        //private static String GetKey(VisitStatModel model)
-        //{
-        //    return $"{model.Page}_{(Int32)model.Level}_{model.Time.ToFullString()}";
-        //}
-
-        //private static VisitStatModel GetModel(String key)
-        //{
-        //    var ks = key.Split("_");
-        //    if (ks.Length < 3) return null;
-
-        //    var model = new VisitStatModel
-        //    {
-        //        Page = ks[0],
-        //        Level = (StatLevels)ks[1].ToInt(),
-        //        Time = ks[2].ToDateTime(),
-        //    };
-
-        //    return model;
-        //}
         #endregion
     }
 }

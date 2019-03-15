@@ -10,7 +10,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyProduct("NewLife.Core")]
 [assembly: AssemblyCompany("新生命开发团队")]
-[assembly: AssemblyCopyright("©2002-2018 新生命开发团队 https://github.com/NewLifeX/X")]
+[assembly: AssemblyCopyright("版权所有(C) 2002-2019 新生命开发团队 https://github.com/NewLifeX/X")]
 [assembly: AssemblyTrademark("四叶草")]
 [assembly: AssemblyCulture("")]
 
@@ -32,10 +32,18 @@ using System.Runtime.InteropServices;
 //
 // 可以指定所有这些值，也可以使用“内部版本号”和“修订号”的默认值，
 // 方法是按如下所示使用“*”:
-[assembly: AssemblyVersion("7.3.*")]
-[assembly: AssemblyFileVersion("7.3.2018.0630")]
+[assembly: AssemblyVersion("8.1.*")]
+[assembly: AssemblyFileVersion("8.1.2019.0307")]
 
 /*
+ * v8.1.2019.0307   ApiServer单连接会话支持多消息并行处理
+ * 
+ * v8.0.2019.0101   standard版完整支持netcore以及nfx应用
+ * 
+ * v8.0.2018.1224   全面进入netstandard时代
+ * 
+ * v7.4.2018.1103   重构Redis，支持自动管道，提升吞吐率
+ * 
  * v7.3.2018.0614   重构高性能资源池，减少GC压力，增加线程池，让异步任务得到平等竞争CPU的机会
  * 
  * v7.0.2018.0506   重构第四代网络库，改进RPC框架

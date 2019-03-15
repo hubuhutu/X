@@ -10,6 +10,7 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading;
 using NewLife;
+using NewLife.Collections;
 using NewLife.Log;
 using NewLife.Reflection;
 using NewLife.Web;
@@ -26,31 +27,20 @@ namespace XCode.DataAccessLayer
         #region 构造函数
         static DbBase()
         {
-#if !__CORE__
-            var root = Runtime.IsWeb ? System.Web.HttpRuntime.BinDirectory : AppDomain.CurrentDomain.BaseDirectory;
-#else
             var root = AppDomain.CurrentDomain.BaseDirectory;
-#endif
+            if (Runtime.IsWeb) root = root.CombinePath("bin");
 
             // 根据进程版本，设定x86或者x64为DLL目录
             var dir = Environment.Is64BitProcess ? "x64" : "x86";
             dir = root.CombinePath(dir);
             //if (Directory.Exists(dir)) SetDllDirectory(dir);
             // 不要判断是否存在，因为可能目录还不存在，一会下载驱动后将创建目录
-#if __CORE__
-            if (!Runtime.Mono && !Runtime.Linux) SetDllDirectory(dir);
-#else
-            if (!Runtime.Mono) SetDllDirectory(dir);
-#endif
+            if (Runtime.Windows) SetDllDirectory(dir);
 
             root = NewLife.Setting.Current.GetPluginPath();
             dir = Environment.Is64BitProcess ? "x64" : "x86";
             dir = root.CombinePath(dir);
-#if __CORE__
-            if (!Runtime.Mono && !Runtime.Linux) SetDllDirectory(dir);
-#else
-            if (!Runtime.Mono) SetDllDirectory(dir);
-#endif
+            if (Runtime.Windows) SetDllDirectory(dir);
         }
 
         /// <summary>销毁资源时，回滚未提交事务，并关闭数据库连接</summary>
@@ -59,7 +49,8 @@ namespace XCode.DataAccessLayer
         {
             base.OnDispose(disposing);
 
-            if (_sessions != null) ReleaseSession();
+            //_store.Values.TryDispose();
+            _store.TryDispose();
 
             if (_metadata != null)
             {
@@ -78,15 +69,9 @@ namespace XCode.DataAccessLayer
         /// <summary>释放所有会话</summary>
         internal void ReleaseSession()
         {
-            var ss = _sessions;
-            if (ss != null)
-            {
-                foreach (var item in ss)
-                {
-                    item.Value.TryDispose();
-                }
-                ss.Clear();
-            }
+            //_store.Values.TryDispose();
+            _store.TryDispose();
+            _store = new ThreadLocal<IDbSession>();
         }
         #endregion
 
@@ -251,46 +236,26 @@ namespace XCode.DataAccessLayer
 
         /// <summary>表前缀。所有在该连接上的表名都自动增加该前缀</summary>
         public String TablePrefix { get; set; }
-
-        /// <summary>格式化的表名。加上Owner和表前缀</summary>
-        /// <param name="tableName"></param>
-        /// <returns></returns>
-        public String FormatTableName(String tableName)
-        {
-            if (!TablePrefix.IsNullOrEmpty()) tableName = TablePrefix + tableName;
-            var tname = FormatName(tableName);
-            if (!Owner.IsNullOrEmpty()) tname = $"{FormatName(Owner)}.{tname}";
-
-            return tname;
-        }
         #endregion
 
         #region 方法
         /// <summary>保证数据库在每一个线程都有唯一的一个实例</summary>
-        private readonly ConcurrentDictionary<Int32, IDbSession> _sessions = new ConcurrentDictionary<Int32, IDbSession>();
+        private ThreadLocal<IDbSession> _store = new ThreadLocal<IDbSession>();
 
         /// <summary>创建数据库会话，数据库在每一个线程都有唯一的一个实例</summary>
         /// <returns></returns>
         public IDbSession CreateSession()
         {
-            var ss = _sessions;
-
-            var tid = Thread.CurrentThread.ManagedThreadId;
             // 会话可能已经被销毁
-            if (ss.TryGetValue(tid, out var session) && session != null && !session.Disposed) return session;
+            var session = _store.Value;
+            if (session != null && !session.Disposed) return session;
 
             session = OnCreateSession();
 
             CheckConnStr();
             session.ConnectionString = ConnectionString;
 
-            //ss[tid] = session;
-            var sn = ss.GetOrAdd(tid, session);
-            if (sn != session)
-            {
-                session.Dispose();
-                session = sn;
-            }
+            _store.Value = session;
 
             return session;
         }
@@ -358,7 +323,7 @@ namespace XCode.DataAccessLayer
                         links.Add(name + ".win");
                     }
 
-                    linkName = name + ".netstandard";
+                    linkName = name + ".st";
 #else
                     if (Environment.Is64BitProcess) linkName += "64";
                     var ver = Environment.Version;
@@ -366,14 +331,7 @@ namespace XCode.DataAccessLayer
 #endif
                     links.Add(linkName);
                     // 有些数据库驱动不区分x86/x64，并且逐步以Fx4为主，所以来一个默认
-                    //linkName += ";" + name;
                     if (!links.Contains(name)) links.Add(name);
-
-#if __CORE__
-                    //linkName = "st_" + name;
-                    // 指定完全类型名可获取项目中添加了引用的类型，否则dll文件需要放在根目录
-                    className = className + "," + name;
-#endif
                 }
 
                 var type = PluginHelper.LoadPlugin(className, null, assemblyFile, links.Join(","));
@@ -699,6 +657,28 @@ namespace XCode.DataAccessLayer
             return name;
         }
 
+        /// <summary>格式化表名，考虑表前缀和Owner</summary>
+        /// <param name="tableName">名称</param>
+        /// <returns></returns>
+        public virtual String FormatTableName(String tableName)
+        {
+            // 检查自动表前缀
+            var pf = TablePrefix;
+            if (!pf.IsNullOrEmpty()) tableName = pf + tableName;
+
+            tableName = FormatName(tableName);
+
+            // 特殊处理Oracle数据库，在表名前加上方案名（用户名）
+            if (!tableName.Contains("."))
+            {
+                // 角色名作为点前缀来约束表名，支持所有数据库
+                var owner = Owner;
+                if (!owner.IsNullOrEmpty()) tableName = FormatName(owner) + "." + tableName;
+            }
+
+            return tableName;
+        }
+
         /// <summary>格式化数据为SQL数据</summary>
         /// <param name="field">字段</param>
         /// <param name="value">数值</param>
@@ -715,11 +695,7 @@ namespace XCode.DataAccessLayer
             else if (value != null)
                 type = value.GetType();
 
-            // 枚举
-            if (type.IsEnum) type = typeof(Int32);
-
-            var code = System.Type.GetTypeCode(type);
-            if (code == TypeCode.String)
+            if (type == typeof(String))
             {
                 if (value == null) return isNullable ? "null" : "''";
                 //!!! 为SQL格式化数值时，如果字符串是Empty，将不再格式化为null
@@ -727,18 +703,18 @@ namespace XCode.DataAccessLayer
 
                 return "'" + value.ToString().Replace("'", "''") + "'";
             }
-            else if (code == TypeCode.DateTime)
+            else if (type == typeof(DateTime))
             {
                 if (value == null) return isNullable ? "null" : "''";
                 var dt = Convert.ToDateTime(value);
 
-                if (dt <= DateTime.MinValue || dt >= DateTime.MaxValue) return isNullable ? "null" : "''";
+                //if (dt <= DateTime.MinValue || dt >= DateTime.MaxValue) return isNullable ? "null" : "''";
 
-                if ((dt == DateTime.MinValue) && isNullable) return "null";
+                if (isNullable && (dt <= DateTime.MinValue || dt >= DateTime.MaxValue)) return "null";
 
                 return FormatDateTime(dt);
             }
-            else if (code == TypeCode.Boolean)
+            else if (type == typeof(Boolean))
             {
                 if (value == null) return isNullable ? "null" : "";
                 return Convert.ToBoolean(value) ? "1" : "0";
@@ -756,16 +732,17 @@ namespace XCode.DataAccessLayer
 
                 return String.Format("'{0}'", value);
             }
-            else
-            {
-                if (value == null) return isNullable ? "null" : "";
 
-                // 转为目标类型，比如枚举转为数字
-                value = value.ChangeType(type);
-                if (value == null) return isNullable ? "null" : "";
+            if (value == null) return isNullable ? "null" : "";
 
-                return value.ToString();
-            }
+            // 枚举
+            if (!type.IsInt() && type.IsEnum) type = typeof(Int32);
+
+            // 转为目标类型，比如枚举转为数字
+            value = value.ChangeType(type);
+            if (value == null) return isNullable ? "null" : "";
+
+            return value.ToString();
         }
 
         ///// <summary>格式化标识列，返回插入数据时所用的表达式，如果字段本身支持自增，则返回空</summary>
@@ -914,6 +891,13 @@ namespace XCode.DataAccessLayer
 
             return file;
         }
+
+        internal DictionaryCache<String, DataTable> _SchemaCache = new DictionaryCache<String, DataTable>(StringComparer.OrdinalIgnoreCase)
+        {
+            Expire = 10,
+            Period = 10 * 60,
+        };
+
         #endregion
 
         #region Sql日志输出

@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -14,8 +14,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\NewLife.CoreST\NewLife.CoreST.csproj" />
-    <ProjectReference Include="..\XCodeST\XCodeST.csproj" />
+    <ProjectReference Include="..\NewLife.Agent\NewLife.Agent.csproj" />
+    <ProjectReference Include="..\NewLife.Core\NewLife.Core.csproj" />
+    <ProjectReference Include="..\XCode\XCode.csproj" />
   </ItemGroup>
 
   <ItemGroup>

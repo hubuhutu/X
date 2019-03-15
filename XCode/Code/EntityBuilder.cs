@@ -408,10 +408,36 @@ namespace XCode.Code
 
                         if (!type.IsNullOrEmpty())
                         {
+                            if (!type.Contains("."))
+                            {
+
+                            }
                             if (!type.Contains(".") && conv.GetMethod("To" + type, new Type[] { typeof(Object) }) != null)
-                                WriteLine("case __.{0} : _{0} = Convert.To{1}(value); break;", dc.Name, type);
+                            {
+                                switch (type)
+                                {
+                                    case "Int32":
+                                        WriteLine("case __.{0} : _{0} = value.ToInt(); break;", dc.Name);
+                                        break;
+                                    case "Int64":
+                                        WriteLine("case __.{0} : _{0} = value.ToLong(); break;", dc.Name);
+                                        break;
+                                    case "Double":
+                                        WriteLine("case __.{0} : _{0} = value.ToDouble(); break;", dc.Name);
+                                        break;
+                                    case "Boolean":
+                                        WriteLine("case __.{0} : _{0} = value.ToBoolean(); break;", dc.Name);
+                                        break;
+                                    case "DateTime":
+                                        WriteLine("case __.{0} : _{0} = value.ToDateTime(); break;", dc.Name);
+                                        break;
+                                    default:
+                                        WriteLine("case __.{0} : _{0} = Convert.To{1}(value); break;", dc.Name, type);
+                                        break;
+                                }
+                            }
                             else
-                                WriteLine("case __.{0} : _{0} = ({1})Convert.ToInt32(value); break;", dc.Name, type);
+                                WriteLine("case __.{0} : _{0} = ({1})value.ToInt(); break;", dc.Name, type);
                         }
                     }
                     WriteLine("default: base[name] = value; break;");
@@ -544,8 +570,14 @@ namespace XCode.Code
                     WriteLine();
                 }
 
-                WriteLine("// 累加字段");
-                WriteLine("//Meta.Factory.AdditionalFields.Add(__.Logins);");
+                // 第一个非自增非主键整型字段，生成累加字段代码
+                var dc = Table.Columns.FirstOrDefault(e => !e.Identity && !e.PrimaryKey && (e.DataType == typeof(Int32) || e.DataType == typeof(Int64)));
+                if (dc != null)
+                {
+                    WriteLine("// 累加字段");
+                    WriteLine("//var df = Meta.Factory.AdditionalFields;");
+                    WriteLine("//df.Add(__.{0});", dc.Name);
+                }
 
                 var ns = new HashSet<String>(Table.Columns.Select(e => e.Name), StringComparer.OrdinalIgnoreCase);
                 WriteLine();
@@ -561,7 +593,7 @@ namespace XCode.Code
                 var di = Table.Indexes.FirstOrDefault(e => e.Unique && e.Columns.Length == 1 && Table.GetColumn(e.Columns[0]).Master);
                 if (di != null)
                 {
-                    var dc = Table.GetColumn(di.Columns[0]);
+                    dc = Table.GetColumn(di.Columns[0]);
 
                     WriteLine();
                     WriteLine("// 单对象缓存");
@@ -639,10 +671,10 @@ namespace XCode.Code
                 if (dc != null) WriteLine("//if (!Dirtys[{0}]) {0} = DateTime.Now;", NameOf(dc.Name));
 
                 dc = Table.Columns.FirstOrDefault(e => e.Name.EqualIgnoreCase("CreateIP"));
-                if (dc != null) WriteLine("//if (isNew && !Dirtys[{0}]) {0} = WebHelper.UserHost;", NameOf(dc.Name));
+                if (dc != null) WriteLine("//if (isNew && !Dirtys[{0}]) {0} = ManageProvider.UserHost;", NameOf(dc.Name));
 
                 dc = Table.Columns.FirstOrDefault(e => e.Name.EqualIgnoreCase("UpdateIP"));
-                if (dc != null) WriteLine("//if (!Dirtys[{0}]) {0} = WebHelper.UserHost;", NameOf(dc.Name));
+                if (dc != null) WriteLine("//if (!Dirtys[{0}]) {0} = ManageProvider.UserHost;", NameOf(dc.Name));
 
                 // 唯一索引检查唯一性
                 var dis = Table.Indexes.Where(e => e.Unique).ToArray();
@@ -807,10 +839,10 @@ namespace XCode.Code
 
                     WriteLine();
                     WriteLine("// 单对象缓存");
-                    WriteLine("//return Meta.SingleCache[{0}];", name);
+                    WriteLine("return Meta.SingleCache[{0}];", name);
 
                     WriteLine();
-                    WriteLine("return Find(_.{0} == {1});", pk.Name, name);
+                    WriteLine("//return Find(_.{0} == {1});", pk.Name, name);
                 }
                 WriteLine("}");
             }

@@ -28,12 +28,8 @@ namespace XCode.DataAccessLayer
                 {
                     lock (typeof(Oracle))
                     {
-#if __CORE__
                         //_Factory = GetProviderFactory("System.Data.OracleClient.dll", "System.Data.OracleClient.OracleClientFactory");
                         _Factory = GetProviderFactory("Oracle.ManagedDataAccess.dll", "Oracle.ManagedDataAccess.Client.OracleClientFactory");
-#else
-                        _Factory = GetProviderFactory("Oracle.ManagedDataAccess.dll", "Oracle.ManagedDataAccess.Client.OracleClientFactory");
-#endif
                     }
                 }
 
@@ -174,9 +170,14 @@ namespace XCode.DataAccessLayer
 
         #region 数据库特性
         /// <summary>已重载。格式化时间</summary>
-        /// <param name="dateTime"></param>
+        /// <param name="dt"></param>
         /// <returns></returns>
-        public override String FormatDateTime(DateTime dateTime) => "To_Date('" + dateTime.ToFullString() + "', 'YYYY-MM-DD HH24:MI:SS')";
+        public override String FormatDateTime(DateTime dt)
+        {
+            if (dt.Hour == 0 && dt.Minute == 0 && dt.Second == 0) return "To_Date('{0:yyyy-MM-dd}', 'YYYY-MM-DD')".F(dt);
+
+            return "To_Date('{0:yyyy-MM-dd HH:mm:ss}', 'YYYY-MM-DD HH24:MI:SS')".F(dt);
+        }
 
         public override String FormatValue(IDataColumn field, Object value)
         {
@@ -229,6 +230,8 @@ namespace XCode.DataAccessLayer
             {
                 if (value is IEnumerable<Object> list)
                     value = list.Select(e => e.ToBoolean() ? 1 : 0).ToArray();
+                else if (value is IEnumerable<Boolean> list2)
+                    value = list2.Select(e => e.ToBoolean() ? 1 : 0).ToArray();
                 else
                     value = value.ToBoolean() ? 1 : 0;
 
@@ -427,26 +430,25 @@ namespace XCode.DataAccessLayer
         #endregion
 
         #region 批量操作
-        public override Int32 Insert(IDataColumn[] columns, IEnumerable<IIndexAccessor> list)
+        public override Int32 Insert(String tableName, IDataColumn[] columns, IEnumerable<IIndexAccessor> list)
         {
             var ps = new HashSet<String>();
-            var sql = GetInsertSql(columns, ps);
+            var sql = GetInsertSql(tableName, columns, ps);
             var dps = GetParameters(columns, ps, list);
 
             return Execute(sql, CommandType.Text, dps);
         }
 
-        private String GetInsertSql(IDataColumn[] columns, ICollection<String> ps)
+        private String GetInsertSql(String tableName, IDataColumn[] columns, ICollection<String> ps)
         {
-            var table = columns.FirstOrDefault().Table;
             var sb = Pool.StringBuilder.Get();
             var db = Database as DbBase;
 
             // 字段列表
-            sb.AppendFormat("Insert Into {0}(", db.FormatTableName(table.TableName));
+            sb.AppendFormat("Insert Into {0}(", db.FormatTableName(tableName));
             foreach (var dc in columns)
             {
-                if (dc.Identity) continue;
+                //if (dc.Identity) continue;
 
                 sb.Append(db.FormatName(dc.ColumnName));
                 sb.Append(",");
@@ -458,7 +460,7 @@ namespace XCode.DataAccessLayer
             sb.Append(" Values(");
             foreach (var dc in columns)
             {
-                if (dc.Identity) continue;
+                //if (dc.Identity) continue;
 
                 sb.Append(db.FormatParameterName(dc.Name));
                 sb.Append(",");
@@ -477,11 +479,13 @@ namespace XCode.DataAccessLayer
             var dps = new List<IDataParameter>();
             foreach (var dc in columns)
             {
-                if (dc.Identity) continue;
+                //if (dc.Identity) continue;
                 if (!ps.Contains(dc.Name)) continue;
 
                 //var vs = new List<Object>();
-                var arr = Array.CreateInstance(dc.DataType, list.Count());
+                var type = dc.DataType;
+                if (!type.IsInt() && type.IsEnum) type = typeof(Int32);
+                var arr = Array.CreateInstance(type, list.Count());
                 var k = 0;
                 foreach (var entity in list)
                 {
@@ -496,19 +500,30 @@ namespace XCode.DataAccessLayer
             return dps.ToArray();
         }
 
-        public override Int32 InsertOrUpdate(IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list)
+        public override Int32 Upsert(String tableName, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list)
         {
             var ps = new HashSet<String>();
-            var insert = GetInsertSql(columns, ps);
-            var update = GetUpdateSql(columns, updateColumns, addColumns, ps);
+            var insert = GetInsertSql(tableName, columns, ps);
+            var update = GetUpdateSql(tableName, columns, updateColumns, addColumns, ps);
 
             var sb = Pool.StringBuilder.Get();
             sb.AppendLine("BEGIN");
             sb.AppendLine(insert + ";");
             sb.AppendLine("EXCEPTION");
-            sb.AppendLine("WHEN DUP_VAL_ON_INDEX THEN");
-            sb.AppendLine(update + ";");
+            // 没有更新时，直接返回，可用于批量插入且其中部分有冲突需要忽略的场景
+            if (!update.IsNullOrEmpty())
+            {
+                sb.AppendLine("WHEN DUP_VAL_ON_INDEX THEN");
+                sb.AppendLine(update + ";");
+            }
+            else
+            {
+                //sb.AppendLine("WHEN OTHERS THEN");
+                sb.AppendLine("WHEN DUP_VAL_ON_INDEX THEN");
+                sb.AppendLine("RETURN;");
+            }
             sb.AppendLine("END;");
+
             var sql = sb.Put(true);
 
             var dps = GetParameters(columns, ps, list);
@@ -516,14 +531,16 @@ namespace XCode.DataAccessLayer
             return Execute(sql, CommandType.Text, dps);
         }
 
-        private String GetUpdateSql(IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, ICollection<String> ps)
+        private String GetUpdateSql(String tableName, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, ICollection<String> ps)
         {
-            var table = columns.FirstOrDefault().Table;
+            if ((updateColumns == null || updateColumns.Count == 0)
+                && (addColumns == null || addColumns.Count == 0)) return null;
+
             var sb = Pool.StringBuilder.Get();
             var db = Database as DbBase;
 
             // 字段列表
-            sb.AppendFormat("Update {0} Set ", db.FormatTableName(table.TableName));
+            sb.AppendFormat("Update {0} Set ", db.FormatTableName(tableName));
             foreach (var dc in columns)
             {
                 if (dc.Identity || dc.PrimaryKey) continue;
@@ -557,6 +574,22 @@ namespace XCode.DataAccessLayer
             sb.Length -= " And ".Length;
 
             return sb.Put(true);
+        }
+
+        /// <summary>批量更新</summary>
+        /// <param name="tableName">表名</param>
+        /// <param name="columns">要更新的字段，默认所有字段</param>
+        /// <param name="updateColumns">要更新的字段，默认脏数据</param>
+        /// <param name="addColumns">要累加更新的字段，默认累加</param>
+        /// <param name="list">实体列表</param>
+        /// <returns></returns>
+        public override Int32 Update(String tableName, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list)
+        {
+            var ps = new HashSet<String>();
+            var sql = GetUpdateSql(tableName, columns, updateColumns, addColumns, ps);
+            var dps = GetParameters(columns, ps, list);
+
+            return Execute(sql, CommandType.Text, dps);
         }
         #endregion
     }

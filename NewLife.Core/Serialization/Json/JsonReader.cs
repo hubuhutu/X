@@ -51,7 +51,7 @@ namespace NewLife.Serialization
         {
             if (type == null && target != null) type = target.GetType();
 
-            if (jobj.GetType().As(type)) return jobj;
+            if (type.IsAssignableFrom(jobj.GetType())) return jobj;
 
             // Json对象是字典，目标类型可以是字典或复杂对象
             if (jobj is IDictionary<String, Object> vdic)
@@ -238,6 +238,8 @@ namespace NewLife.Serialization
                 return Convert.FromBase64String(value + "");
             }
 
+            if (type == typeof(TimeSpan)) return TimeSpan.Parse(value + "");
+
             if (type.GetTypeCode() == TypeCode.Object) return null;
 
             return value.ChangeType(type);
@@ -315,28 +317,43 @@ namespace NewLife.Serialization
                 return dt;
             }
 
+            //用于解决奇葩json中时间字段使用了utc时间戳，还是用双引号包裹起来的情况。
+            if (value is String)
+            {
+                if (Int64.TryParse(value + "", out var result) && result > 0)
+                {
+                    var sdt = result.ToDateTime();
+                    if (UseUTCDateTime) sdt = sdt.ToUniversalTime();
+                    return sdt;
+                }
+            }
+
             var str = (String)value;
+            if (str.IsNullOrEmpty()) return DateTime.MinValue;
 
             var utc = false;
 
-            Int32 year;
-            Int32 month;
-            Int32 day;
-            Int32 hour;
-            Int32 min;
-            Int32 sec;
+            var year = 0;
+            var month = 0;
+            var day = 0;
+            var hour = 0;
+            var min = 0;
+            var sec = 0;
             var ms = 0;
 
             year = CreateInteger(str, 0, 4);
             month = CreateInteger(str, 5, 2);
             day = CreateInteger(str, 8, 2);
-            hour = CreateInteger(str, 11, 2);
-            min = CreateInteger(str, 14, 2);
-            sec = CreateInteger(str, 17, 2);
-            if (str.Length > 21 && str[19] == '.')
-                ms = CreateInteger(str, 20, 3);
+            if (str.Length >= 19)
+            {
+                hour = CreateInteger(str, 11, 2);
+                min = CreateInteger(str, 14, 2);
+                sec = CreateInteger(str, 17, 2);
+                if (str.Length > 21 && str[19] == '.')
+                    ms = CreateInteger(str, 20, 3);
 
-            if (str[str.Length - 1] == 'Z') utc = true;
+                if (str[str.Length - 1] == 'Z') utc = true;
+            }
 
             if (!UseUTCDateTime && !utc)
                 return new DateTime(year, month, day, hour, min, sec, ms);

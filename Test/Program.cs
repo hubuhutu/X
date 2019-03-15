@@ -1,16 +1,18 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Data;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using NewLife.Caching;
 using NewLife.Log;
+using NewLife.Net;
 using NewLife.Remoting;
 using NewLife.Security;
 using NewLife.Serialization;
+using NewLife.Web;
+using XCode.Code;
 using XCode.DataAccessLayer;
 using XCode.Membership;
 using XCode.Service;
@@ -21,8 +23,6 @@ namespace Test
     {
         private static void Main(String[] args)
         {
-            //Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.BelowNormal;
-
             //XTrace.Log = new NetworkLog();
             XTrace.UseConsole();
 #if DEBUG
@@ -35,7 +35,7 @@ namespace Test
                 try
                 {
 #endif
-                    Test6();
+                Test3();
 #if !DEBUG
                 }
                 catch (Exception ex)
@@ -54,52 +54,42 @@ namespace Test
             }
         }
 
-        private static readonly Int32 _count = 0;
         static void Test1()
         {
-            var cpu = Environment.ProcessorCount;
+            //new AgentService().Main();
 
-            var ts = new List<Task>();
-            for (var i = 0; i < 15; i++)
+            var wc = new WebClientX
             {
-                var t = TaskEx.Run(() =>
-                {
-                    XTrace.WriteLine("begin");
-                    Thread.Sleep(2000);
-                    XTrace.WriteLine("end");
-                });
-                ts.Add(t);
-            }
+                Log = XTrace.Log
+            };
+            var url = wc.DownloadLink("http://x.newlifex.com/", "Oracle.ManagedDataAccess.st", ".");
+            XTrace.WriteLine(url);
 
-            Task.WaitAll(ts.ToArray());
+            url = wc.DownloadLink("http://x.newlifex.com/", "MySql.Data.st", ".");
+            XTrace.WriteLine(url);
 
-            Console.WriteLine();
-            ts.Clear();
-            for (var i = 0; i < 15; i++)
-            {
-                //var t = Task.Run(() =>
-                //{
-                //    XTrace.WriteLine("begin");
-                //    Thread.Sleep(2000);
-                //    XTrace.WriteLine("end");
-                //});
-                //ts.Add(t);
-            }
+            url = wc.DownloadLink("http://x.newlifex.com/", "MySql.Data64Fx40,MySql.Data", ".");
+            XTrace.WriteLine(url);
 
-            Task.WaitAll(ts.ToArray());
+            url = wc.DownloadLink("http://x.newlifex.com/", "System.Data.SqlClient.st", ".");
+            XTrace.WriteLine(url);
         }
 
         static void Test2()
         {
-            var sb = new StringBuilder();
-            sb.Append("HelloWorld");
-            sb.Length--;
-            sb.Append("Stone");
-            Console.WriteLine(sb.ToString());
+            UserX.Meta.Session.Dal.Db.ShowSQL = true;
+            Log.Meta.Session.Dal.Db.ShowSQL = true;
+            //var sb = new StringBuilder();
+            //sb.Append("HelloWorld");
+            //sb.Length--;
+            //sb.Append("Stone");
+            //Console.WriteLine(sb.ToString());
 
             //DAL.AddConnStr("Log", "Data Source=tcp://127.0.0.1/ORCL;User Id=scott;Password=tiger;UseParameter=true", null, "Oracle");
-            //DAL.AddConnStr("Log", "Server=.;Port=3306;Database=times;Uid=root;Pwd=Pass@word;", null, "MySql");
+            //DAL.AddConnStr("Log", "Server=.;Port=3306;Database=Log;Uid=root;Pwd=root;", null, "MySql");
             //DAL.AddConnStr("Membership", "Server=.;Port=3306;Database=times;Uid=root;Pwd=Pass@word;TablePrefix=xx_", null, "MySql");
+            DAL.AddConnStr("Membership", @"Server=.\JSQL2008;User ID=sa;Password=sa;Database=Membership;", null, "sqlserver");
+            DAL.AddConnStr("Log", @"Server=.\JSQL2008;User ID=sa;Password=sa;Database=Log;", null, "sqlserver");
 
             var gs = UserX.FindAll(null, null, null, 0, 10);
             Console.WriteLine(gs.First().Logins);
@@ -139,15 +129,108 @@ namespace Test
 
         static void Test3()
         {
-            var svr = new ApiServer(3344)
+            if (Console.ReadLine() == "1")
             {
-                Log = XTrace.Log,
-                EncoderLog = XTrace.Log,
-                StatPeriod = 5
-            };
-            svr.Start();
+                var svr = new ApiServer(1234)
+                {
+                    Log = XTrace.Log,
+                    EncoderLog = XTrace.Log,
+                    StatPeriod = 10,
+                };
 
-            Console.ReadKey(true);
+                var ns = svr.EnsureCreate() as NetServer;
+                ns.EnsureCreateServer();
+                var ts = ns.Servers.FirstOrDefault(e => e is TcpServer);
+                //ts.ProcessAsync = true;
+
+                svr.Start();
+
+                Console.ReadKey();
+            }
+            else
+            {
+                var client = new ApiClient("tcp://127.0.0.1:1234")
+                {
+                    Log = XTrace.Log,
+                    EncoderLog = XTrace.Log,
+                    StatPeriod = 10,
+                };
+                client.Open();
+
+                Task.Run(() =>
+                {
+                    var sw = Stopwatch.StartNew();
+                    try
+                    {
+                        for (var i = 0; i < 10; i++)
+                        {
+                            client.InvokeAsync<Object>("Api/All", new { state = 111 }).Wait();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        XTrace.WriteException(ex);
+                    }
+                    sw.Stop();
+                    XTrace.WriteLine("总耗时 {0:n0}ms", sw.ElapsedMilliseconds);
+                });
+
+                Task.Run(() =>
+                {
+                    var sw = Stopwatch.StartNew();
+                    try
+                    {
+                        for (var i = 0; i < 10; i++)
+                        {
+                            client.InvokeAsync<Object>("Api/All", new { state = 222 }).Wait();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        XTrace.WriteException(ex);
+                    }
+                    sw.Stop();
+                    XTrace.WriteLine("总耗时 {0:n0}ms", sw.ElapsedMilliseconds);
+                });
+
+                Task.Run(() =>
+                {
+                    var sw = Stopwatch.StartNew();
+                    try
+                    {
+                        for (var i = 0; i < 10; i++)
+                        {
+                            client.InvokeAsync<Object>("Api/Info", new { state = 333 }).Wait();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        XTrace.WriteException(ex);
+                    }
+                    sw.Stop();
+                    XTrace.WriteLine("总耗时 {0:n0}ms", sw.ElapsedMilliseconds);
+                });
+
+                Task.Run(() =>
+                {
+                    var sw = Stopwatch.StartNew();
+                    try
+                    {
+                        for (var i = 0; i < 10; i++)
+                        {
+                            client.InvokeAsync<Object>("Api/Info", new { state = 444 }).Wait();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        XTrace.WriteException(ex);
+                    }
+                    sw.Stop();
+                    XTrace.WriteLine("总耗时 {0:n0}ms", sw.ElapsedMilliseconds);
+                });
+
+                Console.ReadKey();
+            }
         }
 
         static void Test4()
@@ -325,93 +408,120 @@ namespace Test
 
         static void Test7()
         {
-            var dal = UserX.Meta.Session.Dal;
-            dal.Db.DataCache = 3;
+            Parameter.Meta.Session.Dal.Db.ShowSQL = true;
 
-            var list = UserX.FindAll();
-            var u = UserX.FindByID(1);
-            var n = UserX.FindCount();
-
-            var sql = "select * from user";
-            var ds = dal.Select(sql);
-            ds = dal.Select(sql, CommandType.Text);
-            ds = dal.Select(sql, CommandType.Text, new Dictionary<String, Object>());
-            var dt = dal.Query(sql, new Dictionary<String, Object>());
-            n = dal.SelectCount(sql, CommandType.Text);
-
-            var sb = SelectBuilder.Create("select roleid,count(*) from user group by roleid order by count(*) desc");
-            ds = dal.Select(sb, 3, 5);
-            dt = dal.Query(sb, 4, 6);
-            n = dal.SelectCount(sb);
-
-            for (var i = 0; i < 10; i++)
+            var p = Parameter.FindByCategoryAndName("量化交易", "交易所");
+            if (p == null) p = new Parameter
             {
-                Console.WriteLine(i);
+                Category = "量化交易",
+                Name = "交易所"
+            };
+            var dic = new Dictionary<Int32, String>
+            {
+                [1] = "上海交易所",
+                [2] = "深圳交易所",
+                [900] = "纽约交易所"
+            };
+            p.SetValue(dic);
+            p.Save();
 
-                list = UserX.FindAll();
-                u = UserX.FindByKey(1);
-                n = UserX.FindCount();
-
-                ds = dal.Select(sql);
-                ds = dal.Select(sql, CommandType.Text);
-                ds = dal.Select(sql, CommandType.Text, new Dictionary<String, Object>());
-                dt = dal.Query(sql, new Dictionary<String, Object>());
-                n = dal.SelectCount(sql, CommandType.Text);
-
-                ds = dal.Select(sb, 3, 5);
-                dt = dal.Query(sb, 4, 6);
-                n = dal.SelectCount(sb);
-
-                Thread.Sleep(1000);
+            var p2 = Parameter.FindByCategoryAndName("量化交易", "交易所");
+            var dic2 = p2.GetHash<Int32, String>();
+            foreach (var item in dic2)
+            {
+                Console.WriteLine("{0}={1}", item.Key, item.Value);
             }
+            Console.WriteLine(p2.ToJson(true));
+            p2.Delete();
         }
 
         static void Test8()
         {
-            var f = @"D:\X\Src\XCode\Membership\Member.xml";
-            var ts = DAL.ImportFrom(f);
-            Console.WriteLine(ts);
+            //XCode.Setting.Current.Debug = false;
 
-            var t = new TestTable()
-            {
-                IsHide = false,
-                Title = "test abc",
-                Content = "abc",
-                Counts = 0,
-                Level = 1,
-                PageSize = 10,
-                PId = 0,
-                Price = 25.85M,
-                Rank = 999,
-                TitleColor = "#000"
-            };
-            t.Save();
+            var dal = UserX.Meta.Session.Dal;
+            var dt = UserX.Meta.Table.DataTable;
+            dal.Db.ShowSQL = false;
 
-            Console.WriteLine($"id:{t.Id}, title:{t.Title}, price:{t.Price}, ishide:{t.IsHide}");
-            Console.WriteLine(t.ToJson(true));
+            File.Delete("member3.db");
+            dal.Sync(dt, "member3");
+
+            dal.Backup(dt.TableName);
+
+            File.Delete("member2.db");
+            //DAL.AddConnStr("member2", "Server=.;Port=3306;Database=member2;Uid=root;Pwd=root;", null, "MySql");
+            //DAL.AddConnStr("member2", "Server=.;Port=3306;Database=member2;Uid=root;Pwd=root;", null, "Oracle");
+            var dal2 = DAL.Create("member2");
+            dal2.Db.ShowSQL = false;
+            dal2.Restore("user.table", dt);
+
+            //dal.BackupAll(null, "backup", true);
+            //dal2.RestoreAll("backup");
         }
 
-        static void Test9()
+        static async void Test9()
         {
-            var rds = Redis.Create("127.0.0.1:6000", 3);
-            //rds.Log = XTrace.Log;
+            //var rds = new Redis();
+            //rds.Server = "127.0.0.1";
+            //if (rds.Pool is ObjectPool<RedisClient> pp) pp.Log = XTrace.Log;
+            //rds.Bench();
 
-            var key = "kkk";
-            //var list = rds.GetList<String>(key);
-            for (var i = 0; i < 100000; i++)
+            //Console.ReadKey();
+
+            var svr = new ApiServer(3379)
             {
-                //list.Add(Rand.NextString(8));
-                rds.Execute(r => r.Execute("RPUSH", key, Rand.NextString(256)));
-            }
-            rds.SetExpire(key, TimeSpan.FromSeconds(120));
+                Log = XTrace.Log
+            };
+            svr.Start();
 
-            //var arr = list.ToArray();
-            var arr = rds.Execute(r => r.Execute<String[]>("LRANGE", key, 0, -1));
-            Console.WriteLine(arr.Length);
-            //foreach (var item in arr)
-            //{
-            //    Console.WriteLine(item);
-            //}
+            var client = new ApiClient("tcp://127.0.0.1:3379")
+            {
+                Log = XTrace.Log
+            };
+            client.Open();
+
+            for (var i = 0; i < 10; i++)
+            {
+                XTrace.WriteLine("Invoke {0}", i);
+                var sw = Stopwatch.StartNew();
+                var rs = await client.InvokeAsync<String[]>("Api/All");
+                sw.Stop();
+                XTrace.WriteLine("{0}=> {1:n0}us", i, sw.Elapsed.TotalMilliseconds * 1000);
+                //XTrace.WriteLine(rs.Join(","));
+            }
+
+            Console.WriteLine();
+            Parallel.For(0, 10, async i =>
+            {
+                XTrace.WriteLine("Invoke {0}", i);
+                var sw = Stopwatch.StartNew();
+                var rs = await client.InvokeAsync<String[]>("Api/All");
+                sw.Stop();
+                XTrace.WriteLine("{0}=> {1:n0}us", i, sw.Elapsed.TotalMilliseconds * 1000);
+                //XTrace.WriteLine(rs.Join(","));
+            });
+        }
+
+        static void Test10()
+        {
+            var dt1 = new DateTime(1970, 1, 1);
+            //var x = dt1.ToFileTimeUtc();
+
+            var yy = Int64.Parse("-1540795502468");
+
+            //var yy = "1540795502468".ToInt();
+            Console.WriteLine(yy);
+
+            var dt = 1540795502468.ToDateTime();
+            var y = dt.ToUniversalTime();
+            Console.WriteLine(dt1.ToLong());
+        }
+
+        static void Test11()
+        {
+            var xmlFile = Path.Combine(Directory.GetCurrentDirectory(), "../X/XCode/Model.xml");
+            var output = Path.Combine(Directory.GetCurrentDirectory(), "../");
+            EntityBuilder.Build(xmlFile, output);
         }
     }
 }

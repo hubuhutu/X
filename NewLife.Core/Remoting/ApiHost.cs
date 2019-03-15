@@ -5,6 +5,7 @@ using NewLife.Collections;
 using NewLife.Data;
 using NewLife.Log;
 using NewLife.Messaging;
+using NewLife.Model;
 using NewLife.Net.Handlers;
 
 namespace NewLife.Remoting
@@ -22,8 +23,8 @@ namespace NewLife.Remoting
         /// <summary>处理器</summary>
         public IApiHandler Handler { get; set; }
 
-        /// <summary>调用超时时间。默认3_000ms</summary>
-        public Int32 Timeout { get; set; } = 3_000;
+        /// <summary>调用超时时间。请求发出后，等待响应的最大时间，默认15_000ms</summary>
+        public Int32 Timeout { get; set; } = 15_000;
 
         /// <summary>发送数据包统计信息</summary>
         public ICounter StatInvoke { get; set; }
@@ -52,11 +53,6 @@ namespace NewLife.Remoting
         /// <param name="controller">控制器对象</param>
         /// <param name="method">动作名称。为空时遍历控制器所有公有成员方法</param>
         public void Register(Object controller, String method) => Manager.Register(controller, method);
-
-        /// <summary>注册服务</summary>
-        /// <param name="type">控制器类型</param>
-        /// <param name="method">动作名称。为空时遍历控制器所有公有成员方法</param>
-        public void Register(Type type, String method) => Manager.Register(type, method);
 
         /// <summary>显示可用服务</summary>
         protected void ShowService()
@@ -89,9 +85,7 @@ namespace NewLife.Remoting
         {
             if (msg.Reply) return null;
 
-            //StatReceive?.Increment();
             var st = StatProcess;
-            //var sw = st == null ? 0 : Stopwatch.GetTimestamp();
             var sw = st.StartCount();
             try
             {
@@ -99,7 +93,6 @@ namespace NewLife.Remoting
             }
             finally
             {
-                //if (st != null) st.Increment(1, (Stopwatch.GetTimestamp() - sw) / 10);
                 st.StopCount(sw);
             }
         }
@@ -113,7 +106,7 @@ namespace NewLife.Remoting
             var code = 0;
             try
             {
-                if (!ApiHostHelper.Decode(msg, out action, out _, out var args)) return null;
+                if (!enc.Decode(msg, out action, out _, out var args)) return null;
 
                 result = OnProcess(session, action, args);
             }
@@ -122,7 +115,7 @@ namespace NewLife.Remoting
                 ex = ex.GetTrue();
 
                 if (ShowError) WriteLog("{0}", ex);
-           
+
                 // 支持自定义错误
                 if (ex is ApiException aex)
                 {
@@ -137,16 +130,17 @@ namespace NewLife.Remoting
             }
 
             // 单向请求无需响应
-            if (msg is DefaultMessage dm && dm.OneWay) return null;
+            if (msg.OneWay) return null;
 
-            // 编码响应数据包，二进制优先
-            if (!(result is Packet pk)) pk = enc.Encode(action, code, result);
-            pk = ApiHostHelper.Encode(action, code, pk);
+            //// 编码响应数据包，二进制优先
+            //if (!(result is Packet pk)) pk = enc.Encode(action, code, result);
+            //pk = enc.Encode(action, code, pk);
 
-            // 构造响应消息
-            var rs = msg.CreateReply();
-            rs.Payload = pk;
-            if (code > 0 && rs is DefaultMessage dm2) dm2.Error = true;
+            //// 构造响应消息
+            //var rs = msg.CreateReply();
+            //rs.Payload = pk;
+            //if (code > 0) rs.Error = true;
+            var rs = enc.CreateResponse(msg, action, code, result);
 
             return rs;
         }

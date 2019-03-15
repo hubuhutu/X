@@ -1,12 +1,9 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.Linq;
+using System.Threading;
 using System.Web;
-using System.Web.Script.Serialization;
-using System.Xml.Serialization;
-using NewLife.Collections;
 using NewLife.Model;
 using NewLife.Threading;
 using NewLife.Web;
@@ -79,17 +76,14 @@ namespace XCode.Membership
         /// <param name="isNew"></param>
         protected override Boolean OnValid(IEntity entity, Boolean isNew)
         {
-            if (!isNew && !entity.Dirtys.Any()) return true;
+            if (!isNew && !entity.HasDirty) return true;
 
             var fs = GetFields(entity.GetType());
 
             // 当前登录用户
             var prv = Provider ?? ManageProvider.Provider;
-#if !__CORE__
-            var user = prv?.Current ?? HttpContext.Current?.User?.Identity as IManageUser;
-#else
+            //var user = prv?.Current ?? HttpContext.Current?.User?.Identity as IManageUser;
             var user = prv?.Current;
-#endif
             if (user != null)
             {
                 if (isNew)
@@ -149,7 +143,7 @@ namespace XCode.Membership
         /// <param name="isNew"></param>
         protected override Boolean OnValid(IEntity entity, Boolean isNew)
         {
-            if (!isNew && !entity.Dirtys.Any()) return true;
+            if (!isNew && !entity.HasDirty) return true;
 
             var fs = GetFields(entity.GetType());
 
@@ -200,9 +194,9 @@ namespace XCode.Membership
         /// <param name="isNew"></param>
         protected override Boolean OnValid(IEntity entity, Boolean isNew)
         {
-            if (!isNew && !entity.Dirtys.Any()) return true;
+            if (!isNew && !entity.HasDirty) return true;
 
-            var ip = WebHelper.UserHost;
+            var ip = ManageProvider.UserHost;
             if (!ip.IsNullOrEmpty())
             {
                 // 如果不是IPv6，去掉后面端口

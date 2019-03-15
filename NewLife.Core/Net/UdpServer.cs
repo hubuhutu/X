@@ -63,7 +63,8 @@ namespace NewLife.Net
         /// <summary>打开</summary>
         protected override Boolean OnOpen()
         {
-            if (Client == null || !Client.IsBound)
+            var sock = Client;
+            if (sock == null || !sock.IsBound)
             {
                 // 根据目标地址适配本地IPv4/IPv6
                 if (Remote != null && !Remote.Address.IsAny())
@@ -73,8 +74,8 @@ namespace NewLife.Net
 
                 if (StatSession == null) StatSession = new PerfCounter();
 
-                Client = NetHelper.CreateUdp(Local.EndPoint.Address.IsIPv4());
-                Client.Bind(Local.EndPoint);
+                Client = sock = NetHelper.CreateUdp(Local.EndPoint.Address.IsIPv4());
+                sock.Bind(Local.EndPoint);
                 CheckDynamic();
 
                 WriteLog("Open {0}", this);
@@ -86,17 +87,17 @@ namespace NewLife.Net
         /// <summary>关闭</summary>
         protected override Boolean OnClose(String reason)
         {
-            if (Client != null)
+            var sock = Client;
+            if (sock != null)
             {
                 WriteLog("Close {0} {1}", reason, this);
 
-                var udp = Client;
                 Client = null;
                 try
                 {
                     CloseAllSession();
 
-                    udp.Shutdown();
+                    sock.Shutdown();
                 }
                 catch (Exception ex)
                 {
@@ -128,27 +129,27 @@ namespace NewLife.Net
 
             try
             {
-                var sp = Client;
-                lock (sp)
+                var sock = Client;
+                lock (sock)
                 {
-                    if (Client.Connected)
+                    if (sock.Connected)
                     {
                         if (Log.Enable && LogSend) WriteLog("Send [{0}]: {1}", count, pk.ToHex());
 
                         if (pk.Next == null)
-                            sp.Send(pk.Data, pk.Offset, count, SocketFlags.None);
+                            sock.Send(pk.Data, pk.Offset, count, SocketFlags.None);
                         else
-                            sp.Send(pk.ToArray(), 0, count, SocketFlags.None);
+                            sock.Send(pk.ToArray(), 0, count, SocketFlags.None);
                     }
                     else
                     {
-                        Client.CheckBroadcast(remote.Address);
+                        sock.CheckBroadcast(remote.Address);
                         if (Log.Enable && LogSend) WriteLog("Send {2} [{0}]: {1}", count, pk.ToHex(), remote);
 
                         if (pk.Next == null)
-                            sp.SendTo(pk.Data, pk.Offset, count, SocketFlags.None, remote);
+                            sock.SendTo(pk.Data, pk.Offset, count, SocketFlags.None, remote);
                         else
-                            sp.SendTo(pk.ToArray(), 0, count, SocketFlags.None, remote);
+                            sock.SendTo(pk.ToArray(), 0, count, SocketFlags.None, remote);
                     }
                 }
 
@@ -201,16 +202,15 @@ namespace NewLife.Net
             LastRemote = remote;
 
             // 为该连接单独创建一个会话，方便直接通信
-            var session = CreateSession(remote);
-
-            return session;
+            return CreateSession(remote);
         }
 
         /// <summary>处理收到的数据</summary>
         /// <param name="e">接收事件参数</param>
         protected override Boolean OnReceive(ReceivedEventArgs e)
         {
-            StatReceive?.Increment(e.Packet.Count, 0);
+            var pk = e.Packet;
+            StatReceive?.Increment(pk.Count, 0);
 
             var remote = e.Remote;
 
@@ -222,7 +222,7 @@ namespace NewLife.Net
             else
             {
                 // 没有匹配到任何会话时，才在这里显示日志。理论上不存在这个可能性
-                if (Log.Enable && LogReceive) WriteLog("Recv [{0}]: {1}", e.Length, e.ToHex(32, null));
+                if (Log.Enable && LogReceive) WriteLog("Recv [{0}]: {1}", pk.Count, pk.ToHex(32, null));
             }
 
             if (session != null) RaiseReceive(session, e);

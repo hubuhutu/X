@@ -12,14 +12,17 @@ namespace NewLife.Serialization
     public class JsonWriter
     {
         #region 属性
-        /// <summary>使用UTC时间</summary>
+        /// <summary>使用UTC时间。默认false</summary>
         public Boolean UseUTCDateTime { get; set; }
 
         /// <summary>使用小写名称</summary>
-        public Boolean LowerCaseName { get; set; }
+        public Boolean LowerCase { get; set; }
 
-        /// <summary>写入空值</summary>
-        public Boolean NullValue { get; set; }
+        /// <summary>使用驼峰命名</summary>
+        public Boolean CamelCase { get; set; }
+
+        /// <summary>写入空值。默认true</summary>
+        public Boolean NullValue { get; set; } = true;
 
         private StringBuilder _Builder = new StringBuilder();
         #endregion
@@ -29,18 +32,27 @@ namespace NewLife.Serialization
         public JsonWriter()
         {
             UseUTCDateTime = false;
-            NullValue = true;
         }
+        #endregion
 
+        #region 静态转换
         /// <summary>对象序列化为Json字符串</summary>
         /// <param name="obj"></param>
-        /// <param name="indented"></param>
+        /// <param name="indented">是否缩进。默认false</param>
+        /// <param name="nullValue">是否写控制。默认true</param>
+        /// <param name="camelCase">是否驼峰命名。默认false</param>
         /// <returns></returns>
-        public String ToJson(Object obj, Boolean indented = false)
+        public static String ToJson(Object obj, Boolean indented = false, Boolean nullValue = true, Boolean camelCase = false)
         {
-            WriteValue(obj);
+            var jw = new JsonWriter
+            {
+                NullValue = nullValue,
+                CamelCase = camelCase
+            };
 
-            var json = _Builder.ToString();
+            jw.WriteValue(obj);
+
+            var json = jw._Builder.ToString();
             if (indented) json = JsonHelper.Format(json);
 
             return json;
@@ -70,6 +82,9 @@ namespace NewLife.Serialization
                 obj is UInt32 || obj is UInt64
             )
                 _Builder.Append(((IConvertible)obj).ToString(NumberFormatInfo.InvariantInfo));
+
+            else if (obj is TimeSpan)
+                WriteString(obj + "");
 
             else if (obj is DateTime)
                 WriteDateTime((DateTime)obj);
@@ -111,12 +126,12 @@ namespace NewLife.Serialization
 
             foreach (String item in nvs)
             {
-                if (NullValue || nvs[item] != null)
+                if (NullValue || !IsNull(nvs[item]))
                 {
                     if (!first) _Builder.Append(',');
                     first = false;
 
-                    var name = LowerCaseName ? item.ToLower() : item;
+                    var name = FormatName(item);
                     WritePair(name, nvs[item]);
                 }
             }
@@ -131,13 +146,12 @@ namespace NewLife.Serialization
 
             foreach (DictionaryEntry item in dic)
             {
-                if (NullValue || item.Value != null)
+                if (NullValue || !IsNull(item.Value))
                 {
                     if (!first) _Builder.Append(',');
                     first = false;
 
-                    var name = (String)item.Key;
-                    if (LowerCaseName) name = name.ToLower();
+                    var name = FormatName((String)item.Key);
                     WritePair(name, item.Value);
                 }
             }
@@ -149,7 +163,17 @@ namespace NewLife.Serialization
             var dt = dateTime;
             if (UseUTCDateTime) dt = dateTime.ToUniversalTime();
 
-            _Builder.AppendFormat("\"{0}\"", dateTime.ToFullString());
+            // 纯日期缩短长度
+            var str = "";
+            if (dt.Year > 1000)
+            {
+                if (dt.Hour == 0 && dt.Minute == 0 && dt.Second == 0)
+                    str = dt.ToString("yyyy-MM-dd");
+                else
+                    str = dt.ToFullString();
+            }
+
+            _Builder.AppendFormat("\"{0}\"", str);
         }
 
         Int32 _depth = 0;
@@ -168,13 +192,12 @@ namespace NewLife.Serialization
             foreach (var pi in t.GetProperties(true))
             {
                 var value = obj.GetValue(pi);
-                if (NullValue || value != null && !(value is DBNull))
+                if (NullValue || !IsNull(value))
                 {
                     if (!first) _Builder.Append(',');
                     first = false;
 
-                    var name = SerialHelper.GetName(pi);
-                    if (LowerCaseName) name = name.ToLower();
+                    var name = FormatName(SerialHelper.GetName(pi));
                     WritePair(name, value);
                 }
             }
@@ -224,13 +247,12 @@ namespace NewLife.Serialization
             var first = true;
             foreach (DictionaryEntry item in dic)
             {
-                if (NullValue || item.Value != null)
+                if (NullValue || !IsNull(item.Value))
                 {
                     if (!first) _Builder.Append(',');
                     first = false;
 
-                    var name = (String)item.Key;
-                    if (LowerCaseName) name = name.ToLower();
+                    var name = FormatName((String)item.Key);
                     WritePair(name, item.Value);
                 }
             }
@@ -244,12 +266,12 @@ namespace NewLife.Serialization
             var first = true;
             foreach (var item in dic)
             {
-                if (NullValue || item.Value != null)
+                if (NullValue || !IsNull(item.Value))
                 {
                     if (!first) _Builder.Append(',');
                     first = false;
 
-                    var name = LowerCaseName ? item.Key.ToLower() : item.Key;
+                    var name = FormatName(item.Key);
                     WritePair(name, item.Value);
                 }
             }
@@ -263,14 +285,17 @@ namespace NewLife.Serialization
             var first = true;
             foreach (DictionaryEntry entry in dic)
             {
-                if (!first) _Builder.Append(',');
-                first = false;
+                if (NullValue || !IsNull(entry.Value))
+                {
+                    if (!first) _Builder.Append(',');
+                    first = false;
 
-                _Builder.Append('{');
-                WritePair("k", entry.Key);
-                _Builder.Append(",");
-                WritePair("v", entry.Value);
-                _Builder.Append('}');
+                    _Builder.Append('{');
+                    WritePair("k", entry.Key);
+                    _Builder.Append(",");
+                    WritePair("v", entry.Value);
+                    _Builder.Append('}');
+                }
             }
             _Builder.Append(']');
         }
@@ -322,6 +347,56 @@ namespace NewLife.Serialization
             if (idx != -1) _Builder.Append(str, idx, str.Length - idx);
 
             _Builder.Append('\"');
+        }
+
+        /// <summary>根据小写和驼峰格式化名称</summary>
+        /// <param name="name"></param>
+        /// <returns></returns>
+        private String FormatName(String name)
+        {
+            if (name.IsNullOrEmpty()) return name;
+
+            if (LowerCase) return name.ToLower();
+            if (CamelCase) return name.Substring(0, 1).ToLower() + name.Substring(1);
+
+            return name;
+        }
+
+        private static IDictionary<TypeCode, Object> _def;
+        private static Boolean IsNull(Object obj)
+        {
+            if (obj == null || obj is DBNull) return true;
+
+            var code = obj.GetType().GetTypeCode();
+            if (code == TypeCode.Object) return false;
+            if (code == TypeCode.Empty || code == TypeCode.DBNull) return true;
+
+            var dic = _def;
+            if (dic == null)
+            {
+                dic = new Dictionary<TypeCode, Object>
+                {
+                    [TypeCode.Boolean] = false,
+                    [TypeCode.Char] = '\0',
+                    [TypeCode.SByte] = (SByte)0,
+                    [TypeCode.Byte] = (Byte)0,
+                    [TypeCode.Int16] = (Int16)0,
+                    [TypeCode.UInt16] = (UInt16)0,
+                    [TypeCode.Int32] = 0,
+                    [TypeCode.UInt32] = (UInt32)0,
+                    [TypeCode.Int64] = (Int64)0,
+                    [TypeCode.UInt64] = (UInt64)0,
+                    [TypeCode.Single] = (Single)0,
+                    [TypeCode.Double] = (Double)0,
+                    [TypeCode.Decimal] = (Decimal)0,
+                    [TypeCode.DateTime] = DateTime.MinValue,
+                    [TypeCode.String] = "",
+                };
+
+                _def = dic;
+            }
+
+            return dic.TryGetValue(code, out var rs) && Equals(obj, rs);
         }
         #endregion
     }

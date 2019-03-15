@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Threading.Tasks;
-using NewLife.Data;
 using NewLife.Messaging;
 
 namespace NewLife.Remoting
@@ -40,7 +39,7 @@ namespace NewLife.Remoting
         /// <summary>发送消息。低级接口，由框架使用</summary>
         /// <param name="msg"></param>
         /// <returns></returns>
-        Task<Tuple<IMessage, Object>> SendAsync(IMessage msg);
+        Task<IMessage> SendAsync(IMessage msg);
 
         /// <summary>发送消息。低级接口，由框架使用</summary>
         /// <param name="msg"></param>

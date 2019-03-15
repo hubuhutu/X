@@ -5,6 +5,7 @@ using System.Data.Common;
 using System.Linq;
 using System.Net;
 using NewLife.Collections;
+using NewLife.Data;
 using NewLife.Reflection;
 
 namespace XCode.DataAccessLayer
@@ -52,7 +53,10 @@ namespace XCode.DataAccessLayer
                 //builder[Server_Key] = "127.0.0.1";
                 builder[Server_Key] = IPAddress.Loopback.ToString();
             }
-            builder.TryAdd(CharSet, "utf8");
+
+            // 默认设置为utf8mb4，支持表情符
+            builder.TryAdd(CharSet, "utf8mb4");
+
             //if (!builder.ContainsKey(AllowZeroDatetime)) builder[AllowZeroDatetime] = "True";
             // 默认最大连接数1000
             if (builder["Pooling"].ToBoolean()) builder.TryAdd(MaxPoolSize, "1000");
@@ -276,17 +280,18 @@ namespace XCode.DataAccessLayer
         updatetime=values(updatetime);
          */
 
-        private String GetBatchSql(IDataTable table, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list)
+        private String GetBatchSql(String tableName, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list)
         {
             var sb = Pool.StringBuilder.Get();
             var db = Database as DbBase;
 
             // 字段列表
-            if (columns == null) columns = table.Columns.ToArray();
-            sb.AppendFormat("Insert Into {0}(", db.FormatTableName(table.TableName));
+            //if (columns == null) columns = table.Columns.ToArray();
+            sb.AppendFormat("Insert Into {0}(", db.FormatTableName(tableName));
             foreach (var dc in columns)
             {
-                if (dc.Identity) continue;
+                // 取消对主键的过滤，避免列名和值无法一一对应的问题
+                //if (dc.Identity) continue;
 
                 sb.Append(db.FormatName(dc.ColumnName));
                 sb.Append(",");
@@ -296,27 +301,68 @@ namespace XCode.DataAccessLayer
 
             // 值列表
             sb.Append(" Values");
-            foreach (var entity in list)
-            {
-                sb.Append("(");
-                foreach (var dc in columns)
-                {
-                    if (dc.Identity) continue;
 
-                    var value = entity[dc.Name];
-                    sb.Append(db.FormatValue(dc, value));
-                    sb.Append(",");
+            // 优化支持DbTable
+            if (list.FirstOrDefault() is DbRow)
+            {
+                // 提前把列名转为索引，然后根据索引找数据
+                DbTable dt = null;
+                Int32[] ids = null;
+                foreach (DbRow dr in list)
+                {
+                    if (dr.Table != dt)
+                    {
+                        dt = dr.Table;
+                        var cs = new List<Int32>();
+                        foreach (var dc in columns)
+                        {
+                            if (dc.Identity)
+                                cs.Add(0);
+                            else
+                                cs.Add(dt.GetColumn(dc.Name));
+                        }
+                        ids = cs.ToArray();
+                    }
+
+                    sb.Append("(");
+                    var row = dt.Rows[dr.Index];
+                    for (var i = 0; i < columns.Length; i++)
+                    {
+                        var dc = columns[i];
+                        //if (dc.Identity) continue;
+
+                        var value = row[ids[i]];
+                        sb.Append(db.FormatValue(dc, value));
+                        sb.Append(",");
+                    }
+                    sb.Length--;
+                    sb.Append("),");
                 }
-                sb.Length--;
-                sb.Append("),");
+            }
+            else
+            {
+                foreach (var entity in list)
+                {
+                    sb.Append("(");
+                    foreach (var dc in columns)
+                    {
+                        //if (dc.Identity) continue;
+
+                        var value = entity[dc.Name];
+                        sb.Append(db.FormatValue(dc, value));
+                        sb.Append(",");
+                    }
+                    sb.Length--;
+                    sb.Append("),");
+                }
             }
             sb.Length--;
 
             // 重复键执行update
-            if (updateColumns != null || addColumns != null)
+            if ((updateColumns != null && updateColumns.Count > 0) || (addColumns != null && addColumns.Count > 0))
             {
                 sb.Append(" On Duplicate Key Update ");
-                if (updateColumns != null)
+                if (updateColumns != null && updateColumns.Count > 0)
                 {
                     foreach (var dc in columns)
                     {
@@ -327,7 +373,7 @@ namespace XCode.DataAccessLayer
                     }
                     sb.Length--;
                 }
-                if (addColumns != null)
+                if (addColumns != null && addColumns.Count > 0)
                 {
                     sb.Append(",");
                     foreach (var dc in columns)
@@ -344,20 +390,15 @@ namespace XCode.DataAccessLayer
             return sb.Put(true);
         }
 
-        public override Int32 Insert(IDataColumn[] columns, IEnumerable<IIndexAccessor> list)
+        public override Int32 Insert(String tableName, IDataColumn[] columns, IEnumerable<IIndexAccessor> list)
         {
-            var table = columns.FirstOrDefault().Table;
-            //var sql = GetBatchSql(table, columns, null, null, list);
-
-            //return Execute(sql);
-
             // 分批
-            var batchSize = 5000;
+            var batchSize = 10_000;
             var rs = 0;
             for (var i = 0; i < list.Count();)
             {
                 var es = list.Skip(i).Take(batchSize).ToList();
-                var sql = GetBatchSql(table, columns, null, null, es);
+                var sql = GetBatchSql(tableName, columns, null, null, es);
                 rs += Execute(sql);
 
                 i += es.Count;
@@ -366,20 +407,15 @@ namespace XCode.DataAccessLayer
             return rs;
         }
 
-        public override Int32 InsertOrUpdate(IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list)
+        public override Int32 Upsert(String tableName, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list)
         {
-            var table = columns.FirstOrDefault().Table;
-            //var sql = GetBatchSql(table, columns, updateColumns, addColumns, list);
-
-            //return Execute(sql);
-
             // 分批
-            var batchSize = 5000;
+            var batchSize = 10_000;
             var rs = 0;
             for (var i = 0; i < list.Count();)
             {
                 var es = list.Skip(i).Take(batchSize).ToList();
-                var sql = GetBatchSql(table, columns, updateColumns, addColumns, es);
+                var sql = GetBatchSql(tableName, columns, updateColumns, addColumns, es);
                 rs += Execute(sql);
 
                 i += es.Count;

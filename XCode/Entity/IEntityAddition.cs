@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace XCode
 {
@@ -28,7 +29,7 @@ namespace XCode
     }
 
     /// <summary>实体累加接口。实现Count+=1的效果</summary>
-    class EntityAddition : IEntityAddition
+    public class EntityAddition : IEntityAddition
     {
         #region 属性
         /// <summary>实体对象</summary>
@@ -36,81 +37,88 @@ namespace XCode
         #endregion
 
         #region 累加
-        [NonSerialized]
-        private ConcurrentDictionary<String, Object> _Data;
+        private String[] _Names;
+        private Object[] _Values;
 
         /// <summary>设置累加字段</summary>
         /// <param name="names">字段集合</param>
         public void Set(IEnumerable<String> names)
         {
-            // 检查集合是否为空
-            if (_Data == null) _Data = new ConcurrentDictionary<String, Object>();
-
+            var ns = new List<String>();
+            var vs = new List<Object>();
             foreach (var item in names)
             {
-                _Data.TryAdd(item, Entity[item]);
+                ns.Add(item);
+                vs.Add(Entity[item]);
             }
+
+            _Names = ns.ToArray();
+            _Values = vs.ToArray();
         }
 
+        /// <summary>获取累加备份</summary>
+        /// <returns></returns>
         public IDictionary<String, Object[]> Get()
         {
             var dic = new Dictionary<String, Object[]>();
+            if (_Names == null) return dic;
 
-            var df = _Data;
-            if (df == null) return dic;
-
-            foreach (var item in df)
+            for (var i = 0; i < _Names.Length; i++)
             {
-                var vs = new Object[2];
-                dic[item.Key] = vs;
+                var key = _Names[i];
 
-                vs[0] = Entity[item.Key];
-                vs[1] = item.Value;
+                var vs = new Object[2];
+                dic[key] = vs;
+
+                vs[0] = Entity[key];
+                vs[1] = _Values[i];
             }
 
             return dic;
         }
 
-        public void Reset(IDictionary<String, Object[]> value)
+        /// <summary>重置累加备份</summary>
+        /// <param name="dfs"></param>
+        public void Reset(IDictionary<String, Object[]> dfs)
         {
-            if (value == null || value.Count == 0) return;
+            if (dfs == null || dfs.Count == 0) return;
+            if (_Names == null) return;
 
-            var df = _Data;
-            if (df == null) return;
-
-            foreach (var item in df)
+            for (var i = 0; i < _Names.Length; i++)
             {
-                var vs = value[item.Key];
-                if (vs != null && vs.Length > 0) df[item.Key] = vs[0];
+                var key = _Names[i];
+                if (dfs.TryGetValue(key, out var vs) && vs != null && vs.Length > 0) _Values[i] = vs[0];
             }
         }
         #endregion
 
         #region 静态
-        public static IList<IEntity> SetField(IList<IEntity> list)
+        /// <summary>设置累加备份</summary>
+        /// <param name="list"></param>
+        public static void SetField(IEnumerable<IEntity> list)
         {
-            if (list == null || list.Count < 1) return list;
+            if (list == null) return;
 
-            var entityType = list[0].GetType();
-            var factory = EntityFactory.CreateOperate(entityType);
-            var fs = factory.AdditionalFields;
+            var first = list.FirstOrDefault();
+            if (first == null) return;
+
+            var fs = first.GetType().AsFactory().AdditionalFields;
             if (fs.Count > 0)
             {
-                foreach (EntityBase entity in list)
+                foreach (var entity in list)
                 {
                     if (entity != null) entity.Addition.Set(fs);
                 }
             }
-
-            return list;
         }
 
-        public static void SetField(EntityBase entity)
+        /// <summary>设置累加备份</summary>
+        /// <param name="entity"></param>
+        public static void SetField(IEntity entity)
         {
             if (entity == null) return;
 
-            var factory = EntityFactory.CreateOperate(entity.GetType());
-            var fs = factory.AdditionalFields;
+            var fs = entity.GetType().AsFactory().AdditionalFields;
             if (fs.Count > 0) entity.Addition.Set(fs);
         }
         #endregion

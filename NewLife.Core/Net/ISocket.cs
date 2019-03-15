@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using NewLife.Collections;
 using NewLife.Data;
 using NewLife.Log;
-using NewLife.Net.Handlers;
+using NewLife.Model;
 using NewLife.Threading;
 
 namespace NewLife.Net
@@ -76,6 +76,11 @@ namespace NewLife.Net
     public interface ISocketRemote : ISocket, IExtend
     {
         #region 属性
+        /// <summary>
+        /// 标识
+        /// </summary>
+        Int32 ID { get; }
+
         /// <summary>远程地址</summary>
         NetUri Remote { get; set; }
 
@@ -87,6 +92,7 @@ namespace NewLife.Net
 
         /// <summary>缓冲区大小</summary>
         Int32 BufferSize { get; set; }
+
         #endregion
 
         #region 发送
@@ -121,7 +127,7 @@ namespace NewLife.Net
 
         /// <summary>处理数据帧</summary>
         /// <param name="data">数据帧</param>
-        void Receive(IData data);
+        void Process(IData data);
         #endregion
     }
 
@@ -243,33 +249,14 @@ namespace NewLife.Net
         /// <summary>添加处理器</summary>
         /// <typeparam name="THandler"></typeparam>
         /// <param name="session">会话</param>
-        public static void Add<THandler>(this ISocket session) where THandler : IHandler, new()
-        {
-            if (session.Pipeline == null) session.Pipeline = new Pipeline();
-
-            session.Pipeline.AddLast(new THandler());
-        }
+        public static void Add<THandler>(this ISocket session) where THandler : IHandler, new() => GetPipe(session).AddLast(new THandler());
 
         /// <summary>添加处理器</summary>
         /// <param name="session">会话</param>
         /// <param name="handler">处理器</param>
-        public static void Add(this ISocket session, IHandler handler)
-        {
-            if (session.Pipeline == null) session.Pipeline = new Pipeline();
+        public static void Add(this ISocket session, IHandler handler) => GetPipe(session).AddLast(handler);
 
-            session.Pipeline.AddLast(handler);
-        }
-
-        ///// <summary>异步发送数据并等待响应</summary>
-        ///// <param name="session">会话</param>
-        ///// <param name="buffer"></param>
-        ///// <returns></returns>
-        //public static async Task<Byte[]> SendAsync(this ISocketRemote session, Byte[] buffer)
-        //{
-        //    var pk = new Packet(buffer);
-        //    var rs = await session.SendAsync(pk);
-        //    return rs?.ToArray();
-        //}
+        private static IPipeline GetPipe(ISocket session) => session.Pipeline ?? (session.Pipeline = new Pipeline());
         #endregion
     }
 }

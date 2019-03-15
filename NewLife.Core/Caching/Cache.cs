@@ -234,6 +234,10 @@ namespace NewLife.Caching
         #endregion
 
         #region 事务
+        /// <summary>提交变更。部分提供者需要刷盘</summary>
+        /// <returns></returns>
+        public virtual Int32 Commit() => 0;
+
         /// <summary>申请分布式锁</summary>
         /// <param name="key"></param>
         /// <param name="msTimeout"></param>
@@ -291,18 +295,8 @@ namespace NewLife.Caching
         /// </remarks>
         public virtual void Bench(Boolean rand = false, Int32 batch = 0)
         {
-            var processor = "";
-            var frequency = 0;
-#if !__CORE__
-            using (var reg = Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\CentralProcessor\0"))
-            {
-                processor = (reg.GetValue("ProcessorNameString") + "").Trim();
-                frequency = reg.GetValue("~MHz").ToInt();
-            }
-#endif
-
             var cpu = Environment.ProcessorCount;
-            XTrace.WriteLine($"{Name}性能测试[{(rand ? "随机" : "顺序")}]，批大小[{batch}]，逻辑处理器 {cpu:n0} 个 {frequency:n0}MHz {processor}");
+            XTrace.WriteLine($"{Name}性能测试[{(rand ? "随机" : "顺序")}]，批大小[{batch}]，逻辑处理器 {cpu:n0} 个");
 
             var times = 10_000;
 
@@ -339,7 +333,7 @@ namespace NewLife.Caching
             XTrace.WriteLine("");
             XTrace.WriteLine($"测试 {times:n0} 项，{threads,3:n0} 线程");
 
-            var key = "Bench_";
+            var key = "bstr_";
             Set(key, Rand.NextString(32));
             var v = Get<String>(key);
             Remove(key);
@@ -354,6 +348,7 @@ namespace NewLife.Caching
             BenchRemove(key, times, threads, rand);
 
             // 累加测试
+            key = "bint_";
             BenchInc(key, times, threads, rand, batch);
         }
 
@@ -415,7 +410,7 @@ namespace NewLife.Caching
             sw.Stop();
 
             var speed = times * 1000 / sw.ElapsedMilliseconds;
-            XTrace.WriteLine($"读取 {times:n0} 项，{threads,3:n0} 线程，耗时 {sw.ElapsedMilliseconds,7:n0}ms 速度 {speed,9:n0} ops");
+            XTrace.WriteLine($"读取 耗时 {sw.ElapsedMilliseconds,7:n0}ms 速度 {speed,9:n0} ops");
         }
 
         /// <summary>赋值测试</summary>
@@ -462,6 +457,9 @@ namespace NewLife.Caching
                             SetAll(dic);
                         }
                     }
+
+                    // 提交变更
+                    Commit();
                 });
             }
             else
@@ -475,12 +473,15 @@ namespace NewLife.Caching
                     {
                         Set(mykey, val);
                     }
+
+                    // 提交变更
+                    Commit();
                 });
             }
             sw.Stop();
 
             var speed = times * 1000 / sw.ElapsedMilliseconds;
-            XTrace.WriteLine($"赋值 {times:n0} 项，{threads,3:n0} 线程，耗时 {sw.ElapsedMilliseconds,7:n0}ms 速度 {speed,9:n0} ops");
+            XTrace.WriteLine($"赋值 耗时 {sw.ElapsedMilliseconds,7:n0}ms 速度 {speed,9:n0} ops");
         }
 
         /// <summary>累加测试</summary>
@@ -501,6 +502,9 @@ namespace NewLife.Caching
                     {
                         Increment(key + i, val);
                     }
+
+                    // 提交变更
+                    Commit();
                 });
             }
             else
@@ -514,12 +518,15 @@ namespace NewLife.Caching
                     {
                         Increment(mykey, val);
                     }
+
+                    // 提交变更
+                    Commit();
                 });
             }
             sw.Stop();
 
             var speed = times * 1000 / sw.ElapsedMilliseconds;
-            XTrace.WriteLine($"累加 {times:n0} 项，{threads,3:n0} 线程，耗时 {sw.ElapsedMilliseconds,7:n0}ms 速度 {speed,9:n0} ops");
+            XTrace.WriteLine($"累加 耗时 {sw.ElapsedMilliseconds,7:n0}ms 速度 {speed,9:n0} ops");
         }
 
         /// <summary>删除测试</summary>
@@ -540,6 +547,9 @@ namespace NewLife.Caching
                     {
                         Remove(key + i);
                     }
+
+                    // 提交变更
+                    Commit();
                 });
             }
             else
@@ -552,12 +562,15 @@ namespace NewLife.Caching
                     {
                         Remove(mykey);
                     }
+
+                    // 提交变更
+                    Commit();
                 });
             }
             sw.Stop();
 
             var speed = times * 1000 / sw.ElapsedMilliseconds;
-            XTrace.WriteLine($"删除 {times:n0} 项，{threads,3:n0} 线程，耗时 {sw.ElapsedMilliseconds,7:n0}ms 速度 {speed,9:n0} ops");
+            XTrace.WriteLine($"删除 耗时 {sw.ElapsedMilliseconds,7:n0}ms 速度 {speed,9:n0} ops");
         }
         #endregion
 

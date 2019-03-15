@@ -86,10 +86,6 @@ namespace XCode
         /// <param name="factory"></param>
         /// <returns></returns>
         String InsertSQL(IEntityOperate factory);
-
-        ///// <summary>插入参数</summary>
-        ///// <param name="entity"></param>
-        //IList<IDataParameter> InsertParameters(IEntity entity);
         #endregion
     }
 
@@ -102,11 +98,11 @@ namespace XCode
         /// <returns></returns>
         public virtual Int32 Insert(IEntity entity)
         {
-            var op = EntityFactory.CreateOperate(entity.GetType());
-            var session = op.Session;
+            var fact = EntityFactory.CreateOperate(entity.GetType());
+            var session = fact.Session;
 
             // 添加数据前，处理Guid
-            SetGuidField(op, entity);
+            SetGuidField(fact, entity);
 
             IDataParameter[] dps = null;
             var sql = SQL(entity, DataObjectMethodType.Insert, ref dps);
@@ -115,9 +111,9 @@ namespace XCode
             var rs = 0;
 
             //检查是否有标识列，标识列需要特殊处理
-            var field = op.Table.Identity;
-            var bAllow = op.AllowInsertIdentity;
-            if (field != null && field.IsIdentity && !bAllow && op.AutoIdentity)
+            var field = fact.Table.Identity;
+            var bAllow = fact.AllowInsertIdentity;
+            if (field != null && field.IsIdentity && !bAllow && fact.AutoIdentity)
             {
                 var id = session.InsertAndGetIdentity(sql, CommandType.Text, dps);
                 if (id > 0) entity[field.Name] = id;
@@ -127,12 +123,12 @@ namespace XCode
             {
                 if (bAllow)
                 {
-                    var dal = DAL.Create(op.ConnName);
+                    var dal = DAL.Create(fact.ConnName);
                     if (dal.DbType == DatabaseType.SqlServer)
                     {
                         // 如果所有字段都不是自增，则取消对自增的处理
-                        if (op.Fields.All(f => !f.IsIdentity)) bAllow = false;
-                        if (bAllow) sql = String.Format("SET IDENTITY_INSERT {1} ON;{0};SET IDENTITY_INSERT {1} OFF", sql, op.FormatedTableName);
+                        if (fact.Fields.All(f => !f.IsIdentity)) bAllow = false;
+                        if (bAllow) sql = String.Format("SET IDENTITY_INSERT {1} ON;{0};SET IDENTITY_INSERT {1} OFF", sql, fact.FormatedTableName);
                     }
                 }
                 rs = session.Execute(sql, CommandType.Text, dps);
@@ -150,7 +146,7 @@ namespace XCode
             if (fi != null)
             {
                 // 判断是否设置了数据
-                if (!entity.Dirtys[fi.Name])
+                if (!entity.IsDirty(fi.Name))
                 {
                     // 如果没有设置，这里给它设置
                     if (fi.Type == typeof(Guid))
@@ -166,9 +162,8 @@ namespace XCode
         /// <returns></returns>
         public virtual Int32 Update(IEntity entity)
         {
-            var ds = entity.Dirtys;
             // 没有脏数据，不需要更新
-            if (!ds.Any()) return 0;
+            if (!entity.HasDirty) return 0;
 
             IDataParameter[] dps = null;
             var sql = "";
@@ -176,17 +171,17 @@ namespace XCode
             // 双锁判断脏数据
             lock (entity)
             {
-                if (ds.Count == 0) return 0;
+                if (!entity.HasDirty) return 0;
 
                 sql = SQL(entity, DataObjectMethodType.Update, ref dps);
                 if (sql.IsNullOrEmpty()) return 0;
 
                 //清除脏数据，避免重复提交
-                ds.Clear();
+                entity.Dirtys.Clear();
             }
 
-            var op = EntityFactory.CreateOperate(entity.GetType());
-            var session = op.Session;
+            var fact = EntityFactory.CreateOperate(entity.GetType());
+            var session = fact.Session;
             var rs = session.Execute(sql, CommandType.Text, dps);
 
             //EntityAddition.ClearValues(entity as EntityBase);
@@ -254,9 +249,9 @@ namespace XCode
         /// <returns></returns>
         public virtual Int32 Update(IEntityOperate factory, String setClause, String whereClause)
         {
-            if (setClause.IsNullOrEmpty() || !setClause.Contains("=")) throw new ArgumentException("非法参数");
+            if (setClause.IsNullOrEmpty() || !setClause.Contains("=") || setClause.ToLower().Contains(" or ")) throw new ArgumentException("非法参数");
 
-            var sql = String.Format("Update {0} Set {1}", factory.FormatedTableName, setClause);
+            var sql = String.Format("Update {0} Set {1}", factory.FormatedTableName, setClause.Replace("And", ","));
             if (!String.IsNullOrEmpty(whereClause)) sql += " Where " + whereClause;
             return factory.Session.Execute(sql);
         }
@@ -332,34 +327,19 @@ namespace XCode
         /// <returns>SQL字符串</returns>
         String SQL(IEntity entity, DataObjectMethodType methodType, ref IDataParameter[] parameters)
         {
-            //var op = EntityFactory.CreateOperate(entity.GetType());
-            //var formatedTalbeName = op.FormatedTableName;
-
-            //String sql;
-
             switch (methodType)
             {
-                //case DataObjectMethodType.Fill:
-                //    return String.Format("Select * From {0}", formatedTalbeName);
-                //case DataObjectMethodType.Select:
-                //    sql = DefaultCondition(entity);
-                //    // 没有标识列和主键，返回取所有数据的语句
-                //    if (String.IsNullOrEmpty(sql)) throw new XCodeException("实体类缺少主键！");
-                //    return String.Format("Select * From {0} Where {1}", formatedTalbeName, sql);
-                case DataObjectMethodType.Insert:
-                    return InsertSQL(entity, ref parameters);
-                case DataObjectMethodType.Update:
-                    return UpdateSQL(entity, ref parameters);
-                case DataObjectMethodType.Delete:
-                    return DeleteSQL(entity, ref parameters);
+                case DataObjectMethodType.Insert: return InsertSQL(entity, ref parameters);
+                case DataObjectMethodType.Update: return UpdateSQL(entity, ref parameters);
+                case DataObjectMethodType.Delete: return DeleteSQL(entity, ref parameters);
             }
             return null;
         }
 
         static String InsertSQL(IEntity entity, ref IDataParameter[] parameters)
         {
-            var op = EntityFactory.CreateOperate(entity.GetType());
-            var up = op.Session.Dal.Db.UseParameter;
+            var fact = EntityFactory.CreateOperate(entity.GetType());
+            var db = fact.Session.Dal.Db;
 
             /*
             * 插入数据原则：
@@ -369,63 +349,41 @@ namespace XCode
             * 4，没有脏数据，不允许空，没有默认值的参与，需要智能识别并添加相应字段的默认数据
             */
 
-            // 缓存参数化时的SQL语句
-            var key = "{0}_Insert".F(entity.GetType().FullName);
-            var sql = "";
-
-            StringBuilder sbNames = null;
-            StringBuilder sbValues = null;
-            if (!up || !op.Session.Items.TryGetValue(key, out var oql))
-            {
-                sbNames = Pool.StringBuilder.Get();
-                sbValues = Pool.StringBuilder.Get();
-            }
-            else
-                sql = oql + "";
+            var sbNames = Pool.StringBuilder.Get();
+            var sbValues = Pool.StringBuilder.Get();
 
             var dps = new List<IDataParameter>();
             // 只读列没有插入操作
-            foreach (var fi in op.Fields)
+            foreach (var fi in fact.Fields)
             {
                 var value = entity[fi.Name];
                 // 标识列不需要插入，别的类型都需要
-                if (sbNames != null && CheckIdentity(fi, value, op, sbNames, sbValues)) continue;
+                if (CheckIdentity(fi, value, fact, sbNames, sbValues)) continue;
 
-                // 1，有脏数据的字段一定要参与同时对于实体有值的也应该参与（针对通过置空主键的方式另存）
-                if (!up && value == null && !entity.Dirtys[fi.Name])
+                // 1，有脏数据的字段一定要参与
+                if (!fact.FullInsert && !entity.IsDirty(fi.Name)) continue;
+
+                sbNames.Separate(", ").Append(fact.FormatName(fi.ColumnName));
+                sbValues.Separate(", ");
+
+                if (db.UseParameter || UseParam(fi, value))
                 {
-                    // 2，没有脏数据，允许空的字段不参与
-                    if (fi.IsNullable) continue;
-                    //// 3，没有脏数据，不允许空，有默认值的不参与
-                    //if (fi.DefaultValue != null) continue;
+                    var dp = CreateParameter(db, fi, value);
+                    dps.Add(dp);
 
-                    // 4，没有脏数据，不允许空，没有默认值的参与，需要智能识别并添加相应字段的默认数据
-                    value = FormatParamValue(fi, null, op);
+                    sbValues.Append(dp.ParameterName);
                 }
-
-                if (sbNames != null) sbNames.Separate(", ").Append(op.FormatName(fi.ColumnName));
-                if (sbValues != null) sbValues.Separate(", ");
-
-                if (up || UseParam(fi, value))
-                    dps.Add(CreateParameter(sbValues, op, fi, value));
                 else
-                    sbValues.Append(op.FormatValue(fi, value));
+                    sbValues.Append(fact.FormatValue(fi, value));
             }
 
             var ns = sbNames.Put(true);
             var vs = sbValues.Put(true);
-            if (ns.IsNullOrEmpty() && sql.IsNullOrEmpty()) return null;
+            if (ns.IsNullOrEmpty()) return null;
 
             if (dps.Count > 0) parameters = dps.ToArray();
 
-            if (!ns.IsNullOrEmpty())
-            {
-                sql = String.Format("Insert Into {0}({1}) Values({2})", op.FormatedTableName, ns, vs);
-                // 缓存参数化时的SQL语句
-                if (up) op.Session.Items[key] = sql;
-            }
-
-            return sql;
+            return "Insert Into {0}({1}) Values({2})".F(fact.FormatedTableName, ns, vs);
         }
 
         static Boolean CheckIdentity(FieldItem fi, Object value, IEntityOperate op, StringBuilder sbNames, StringBuilder sbValues)
@@ -460,80 +418,117 @@ namespace XCode
              * 4，累加字段特殊处理
              */
 
-            var def = DefaultCondition(entity);
-            //if (String.IsNullOrEmpty(def)) return null;
-            if (def.Empty) return null;
+            var fact = EntityFactory.CreateOperate(entity.GetType());
+            var db = fact.Session.Dal.Db;
+
+            var exp = DefaultCondition(entity);
+            var ps = !db.UseParameter ? null : new Dictionary<String, Object>();
+            var def = exp?.GetString(ps);
+            if (def.IsNullOrEmpty()) return null;
 
             // 处理累加字段
-            var dfs = (entity as EntityBase).Addition.Get();
-
-            var op = EntityFactory.CreateOperate(entity.GetType());
-            var up = op.Session.Dal.Db.UseParameter;
+            var dfs = entity.Addition?.Get();
 
             var sb = Pool.StringBuilder.Get();
             var dps = new List<IDataParameter>();
             // 只读列没有更新操作
-            foreach (var fi in op.Fields)
+            foreach (var fi in fact.Fields)
             {
                 if (fi.IsIdentity) continue;
 
                 //脏数据判断
-                if (!entity.Dirtys[fi.Name]) continue;
+                if (!entity.IsDirty(fi.Name)) continue;
 
                 var value = entity[fi.Name];
 
                 sb.Separate(", "); // 加逗号
 
-                var name = op.FormatName(fi.ColumnName);
+                var name = fact.FormatName(fi.ColumnName);
                 sb.Append(name);
                 sb.Append("=");
 
-                if (up || UseParam(fi, value))
-                    dps.Add(CreateParameter(sb, op, fi, value));
+                // 检查累加
+                var flag = TryCheckAdditionalValue(dfs, fi.Name, out var val, out var sign);
+
+                if (db.UseParameter || UseParam(fi, value))
+                {
+                    var dp = CreateParameter(db, fi, flag ? val : value);
+                    dps.Add(dp);
+
+                    // 检查累加
+                    if (flag)
+                    {
+                        if (sign)
+                            sb.AppendFormat("{0}+{1}", name, dp.ParameterName);
+                        else
+                            sb.AppendFormat("{0}-{1}", name, dp.ParameterName);
+                    }
+                    else
+                    {
+                        sb.Append(dp.ParameterName);
+                    }
+                }
                 else
                 {
                     // 检查累加
-                    if (!CheckAdditionalValue(sb, dfs, fi.Name, name))
-                        sb.Append(op.FormatValue(fi, value)); // 数据
+                    if (flag)
+                    {
+                        if (sign)
+                            sb.AppendFormat("{0}+{1}", name, val);
+                        else
+                            sb.AppendFormat("{0}-{1}", name, val);
+                    }
+                    else
+                        sb.Append(fact.FormatValue(fi, value));
                 }
             }
 
             // 重置累加数据
-            (entity as EntityBase).Addition.Reset(dfs);
+            if (dfs != null && dfs.Count > 0) entity.Addition.Reset(dfs);
 
             var str = sb.Put(true);
             if (str.IsNullOrEmpty()) return null;
 
+            // Where条件里面的参数化
+            if (ps != null)
+            {
+                foreach (var item in ps)
+                {
+                    var dp = db.CreateParameter(item.Key, item.Value, fact.Table.FindByName(item.Key)?.Field);
+
+                    dps.Add(dp);
+                }
+            }
+
             if (dps.Count > 0) parameters = dps.ToArray();
-            return String.Format("Update {0} Set {1} Where {2}", op.FormatedTableName, str, def);
+            return "Update {0} Set {1} Where {2}".F(fact.FormatedTableName, str, def);
         }
 
         static String DeleteSQL(IEntity entity, ref IDataParameter[] parameters)
         {
-            var op = EntityFactory.CreateOperate(entity.GetType());
-            var up = op.Session.Dal.Db.UseParameter;
+            var fact = EntityFactory.CreateOperate(entity.GetType());
+            var db = fact.Session.Dal.Db;
 
             // 标识列作为删除关键字
             var exp = DefaultCondition(entity);
-            var ps = !up ? null : new Dictionary<String, Object>();
-            var sql = exp?.GetString(ps);
-            if (sql.IsNullOrEmpty()) return null;
+            var ps = !db.UseParameter ? null : new Dictionary<String, Object>();
+            var def = exp?.GetString(ps);
+            if (def.IsNullOrEmpty()) return null;
 
             if (ps != null && ps.Count > 0)
             {
-                var db = op.Session.Dal.Db;
                 var dps = new List<IDataParameter>();
                 foreach (var item in ps)
                 {
-                    var dp = db.CreateParameter(item.Key, item.Value, op.Table.FindByName(item.Key)?.Field);
+                    var dp = db.CreateParameter(item.Key, item.Value, fact.Table.FindByName(item.Key)?.Field);
 
                     dps.Add(dp);
                 }
                 parameters = dps.ToArray();
             }
 
-            var formatedTalbeName = op.FormatedTableName;
-            return String.Format("Delete From {0} Where {1}", formatedTalbeName, sql);
+            var formatedTalbeName = fact.FormatedTableName;
+            return "Delete From {0} Where {1}".F(formatedTalbeName, def);
         }
 
         static Boolean UseParam(FieldItem fi, Object value)
@@ -545,77 +540,36 @@ namespace XCode
 
             // 虽然是大字段，但数据量不大时不用参数
             if (fi.Type == typeof(String))
-            {
                 return value is String str && str.Length > 4000;
-            }
             else if (fi.Type == typeof(Byte[]))
-            {
                 return value is Byte[] str && str.Length > 4000;
-            }
 
             return false;
         }
 
-        static Object FormatParamValue(FieldItem fi, Object value, IEntityOperate eop)
+        static IDataParameter CreateParameter(IDatabase db, FieldItem fi, Object value)
         {
-            if (value != null) return value;
-
-            if (fi.IsNullable) return DBNull.Value;
-
-            switch (Type.GetTypeCode(fi.Type))
-            {
-                case TypeCode.Boolean:
-                    return false;
-                case TypeCode.DBNull:
-                case TypeCode.Empty:
-                    return DBNull.Value;
-                case TypeCode.DateTime:
-                    return DateTime.MinValue;
-                case TypeCode.Byte:
-                case TypeCode.Char:
-                case TypeCode.Decimal:
-                case TypeCode.Double:
-                case TypeCode.Int16:
-                case TypeCode.Int32:
-                case TypeCode.Int64:
-                case TypeCode.SByte:
-                case TypeCode.Single:
-                case TypeCode.UInt16:
-                case TypeCode.UInt32:
-                case TypeCode.UInt64:
-                    return 0;
-                case TypeCode.String:
-                    return String.Empty;
-                default:
-                    break;
-            }
-
-            return DBNull.Value;
-        }
-
-        static IDataParameter CreateParameter(StringBuilder sb, IEntityOperate op, FieldItem fi, Object value)
-        {
-            var dp = op.Session.Dal.Db.CreateParameter(fi.ColumnName ?? fi.Name, value, fi.Field);
-
-            if (sb != null) sb.Append(dp.ParameterName);
+            var dp = db.CreateParameter(fi.ColumnName ?? fi.Name, value, fi.Field);
 
             if (dp is DbParameter dbp) dbp.IsNullable = fi.IsNullable;
 
             return dp;
         }
 
-        static Boolean CheckAdditionalValue(StringBuilder sb, IDictionary<String, Object[]> dfs, String name, String cname)
+        static Boolean TryCheckAdditionalValue(IDictionary<String, Object[]> dfs, String name, out Object value, out Boolean sign)
         {
+            value = null;
+            sign = false;
             if (dfs == null || !dfs.TryGetValue(name, out var vs)) return false;
 
             var cur = vs[0];
             var old = vs[1];
 
-            // 如果原始值是0，不使用累加，因为可能原始数据字段是NULL，导致累加失败
-            if (Convert.ToInt64(old) == 0) return false;
+            //// 如果原始值是0，不使用累加，因为可能原始数据字段是NULL，导致累加失败
+            //if (Convert.ToInt64(old) == 0) return false;
 
-            var sign = true;
-            var value = old;
+            sign = true;
+            value = old;
 
             // 计算累加数据
             switch (cur.GetType().GetTypeCode())
@@ -675,10 +629,6 @@ namespace XCode
                 default:
                     break;
             }
-            if (sign)
-                sb.AppendFormat("{0}+{1}", cname, value);
-            else
-                sb.AppendFormat("{0}-{1}", cname, value);
 
             return true;
         }
@@ -711,24 +661,13 @@ namespace XCode
             // 主键作为查询关键字
             var ps = op.Table.PrimaryKeys;
             // 没有标识列和主键，返回取所有数据的语句
-            if (ps == null || ps.Length < 1)
-            {
-                //if (DAL.Debug) throw new XCodeException("因为没有主键，无法给实体类构造默认条件！");
-                //return null;
-                ps = op.Table.Fields;
-            }
+            if (ps == null || ps.Length < 1) ps = op.Table.Fields;
 
-            //var sb = Pool.StringBuilder.Get();
             foreach (var item in ps)
             {
-                //if (sb.Length > 0) sb.Append(" And ");
-                //sb.Append(op.FormatName(item.ColumnName));
-                //sb.Append("=");
-                //sb.Append(op.FormatValue(item, entity[item.Name]));
-
                 exp &= (item as Field) == entity[item.Name];
             }
-            //return sb.ToString();
+
             return exp;
         }
         #endregion
@@ -739,46 +678,26 @@ namespace XCode
         /// <returns></returns>
         public virtual String InsertSQL(IEntityOperate factory)
         {
-            var op = factory;
-            var db = op.Session.Dal.Db;
+            var fact = factory;
+            var db = fact.Session.Dal.Db;
 
             var sbNames = Pool.StringBuilder.Get();
             var sbValues = Pool.StringBuilder.Get();
 
-            foreach (var fi in op.Fields)
+            foreach (var fi in fact.Fields)
             {
                 // 标识列不需要插入，别的类型都需要
-                if (fi.IsIdentity && !op.AllowInsertIdentity) continue;
+                if (fi.IsIdentity && !fact.AllowInsertIdentity) continue;
 
-                sbNames.Separate(", ").Append(op.FormatName(fi.ColumnName));
+                sbNames.Separate(", ").Append(fact.FormatName(fi.ColumnName));
                 sbValues.Separate(", ").Append(db.FormatParameterName(fi.Name));
             }
 
             var ns = sbNames.Put(true);
             var vs = sbValues.Put(true);
 
-            return $"Insert Into {op.FormatedTableName}({ns}) Values({vs})";
+            return $"Insert Into {fact.FormatedTableName}({ns}) Values({vs})";
         }
-
-        ///// <summary>插入参数</summary>
-        ///// <param name="entity"></param>
-        //public virtual IList<IDataParameter> InsertParameters(IEntity entity)
-        //{
-        //    var op = entity.GetType().AsFactory();
-        //    var db = op.Session.Dal.Db;
-
-        //    var dps = new List<IDataParameter>();
-        //    foreach (var fi in op.Fields)
-        //    {
-        //        // 标识列不需要插入，别的类型都需要
-        //        if (fi.IsIdentity && !op.AllowInsertIdentity) continue;
-
-        //        var dp = db.CreateParameter(fi.Name, entity[fi.Name], fi.Field);
-        //        dps.Add(dp);
-        //    }
-
-        //    return dps;
-        //}
         #endregion
     }
 }

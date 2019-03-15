@@ -35,21 +35,12 @@ namespace XCode
         /// <summary>保存速度，每秒保存多少个实体</summary>
         public Int32 Speed { get; private set; }
 
-        ///// <summary>完成事件。</summary>
-        //public event EventHandler<EventArgs<IEntity, Int32>> Completed;
-
-        /// <summary>错误发生时</summary>
-        public event EventHandler<EventArgs<Exception>> Error;
-
         private TimerX _Timer;
         #endregion
 
         #region 构造
         /// <summary>实例化实体队列</summary>
-        public EntityQueue(IEntitySession session)
-        {
-            Session = session;
-        }
+        public EntityQueue(IEntitySession session) => Session = session;
         #endregion
 
         #region 方法
@@ -114,8 +105,6 @@ namespace XCode
                 {
                     ds.Remove(item);
                 }
-
-                //n += ds.Count;
             }
 
             // 检查是否有近实时保存
@@ -129,11 +118,8 @@ namespace XCode
                 n += es.Count;
             }
 
-            //_count = n;
-
             if (list.Count > 0)
             {
-                //_count -= list.Count;
                 Interlocked.Add(ref _count, -list.Count);
 
                 Process(list);
@@ -156,7 +142,7 @@ namespace XCode
             var sw = Stopwatch.StartNew();
 
             // 分批
-            var batchSize = 5000;
+            var batchSize = 10_000;
             for (var i = 0; i < list.Count();)
             {
                 var batch = list.Skip(i).Take(batchSize).ToList();
@@ -167,17 +153,7 @@ namespace XCode
                 }
                 catch (Exception ex)
                 {
-                    //// 保存失败，写回去
-                    //foreach (var entity in list)
-                    //{
-                    //    Entities.TryAdd(entity, entity);
-                    //}
-                    //Interlocked.Add(ref _count, list.Count);
-
-                    if (Error != null)
-                        Error(this, new EventArgs<Exception>(ex));
-                    else
-                        XTrace.WriteException(ex);
+                    OnError(batch, ex);
                 }
 
                 i += batch.Count;
@@ -215,6 +191,11 @@ namespace XCode
             // 马上再来一次，以便于连续处理数据
             _Timer.SetNext(-1);
         }
+
+        /// <summary>发生错误</summary>
+        /// <param name="list"></param>
+        /// <param name="ex"></param>
+        protected virtual void OnError(IList<IEntity> list, Exception ex) => XTrace.WriteException(ex);
         #endregion
     }
 }

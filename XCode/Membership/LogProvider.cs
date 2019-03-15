@@ -54,7 +54,7 @@ namespace XCode.Membership
             var sb = Pool.StringBuilder.Get();
             foreach (var fi in fact.Fields)
             {
-                if (action == "修改" && !fi.PrimaryKey && !entity.Dirtys[fi.Name]) continue;
+                if (action == "修改" && !fi.PrimaryKey && !entity.IsDirty(fi.Name)) continue;
                 var v = entity[fi.Name];
                 // 空字符串不写日志
                 if (action == "添加" || action == "删除")
@@ -173,11 +173,8 @@ namespace XCode.Membership
             {
                 // 当前登录用户
                 var prv = Provider2 ?? ManageProvider.Provider;
-#if !__CORE__
-                var user = prv?.Current ?? HttpContext.Current?.User?.Identity as IManageUser;
-#else
+                //var user = prv?.Current ?? HttpContext.Current?.User?.Identity as IManageUser;
                 var user = prv?.Current;
-#endif
                 if (user != null)
                 {
                     if (log.CreateUserID == 0) log.CreateUserID = user.ID;

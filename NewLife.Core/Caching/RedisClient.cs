@@ -169,7 +169,7 @@ namespace NewLife.Caching
                     ms.Write(sizes);
                     ms.Write(NewLine);
                     //ms.Write(item);
-                    item.WriteTo(ms);
+                    item.CopyTo(ms);
                     ms.Write(NewLine);
                 }
             }
@@ -475,7 +475,7 @@ namespace NewLife.Caching
             if (ms.Length > 0) ms.WriteTo(ns);
             ms.Put();
 
-            if (!requireResult) return null;
+            if (!requireResult) return new Object[ps.Count];
 
             // 获取响应
             var list = GetResponse(ns, ps.Count);
@@ -588,7 +588,7 @@ namespace NewLife.Caching
             var dic = new Dictionary<String, T>();
             if (rs == null) return dic;
 
-            for (var i = 0; i < rs.Length; i++)
+            for (var i = 0; i < ks.Length && i < rs.Length; i++)
             {
                 dic[ks[i]] = FromBytes<T>(rs[i] as Packet);
             }

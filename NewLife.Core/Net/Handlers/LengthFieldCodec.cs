@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
 using NewLife.Data;
+using NewLife.Messaging;
+using NewLife.Model;
 
 namespace NewLife.Net.Handlers
 {
@@ -79,21 +81,31 @@ namespace NewLife.Net.Handlers
         /// <returns></returns>
         protected override IList<Packet> Decode(IHandlerContext context, Packet pk)
         {
-            var ss = context.Session;
-            var mcp = ss["CodecItem"] as CodecItem;
-            if (mcp == null) ss["CodecItem"] = mcp = new CodecItem();
+            var ss = context.Owner as IExtend;
+            var pc = ss["Codec"] as PacketCodec;
+            if (pc == null) ss["Codec"] = pc = new PacketCodec { Expire = Expire, GetLength = p => GetLength(p, Offset, Size) };
 
-            var pks = Parse(pk, mcp, ms => GetLength(ms, Offset, Size), Expire);
+            var pks = pc.Parse(pk);
 
             // 跳过头部长度
             var len = Offset + Math.Abs(Size);
             foreach (var item in pks)
             {
                 item.Set(item.Data, item.Offset + len, item.Count - len);
-                //item.SetSub(len, item.Count - len);
             }
 
             return pks;
+        }
+
+        /// <summary>连接关闭时，清空粘包编码器</summary>
+        /// <param name="context"></param>
+        /// <param name="reason"></param>
+        /// <returns></returns>
+        public override Boolean Close(IHandlerContext context, String reason)
+        {
+            if (context.Owner is IExtend ss) ss["Codec"] = null;
+
+            return base.Close(context, reason);
         }
     }
 }

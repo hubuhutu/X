@@ -5,17 +5,12 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using NewLife.Collections;
+using NewLife.Data;
 using NewLife.Log;
-using NewLife.Messaging;
 using NewLife.Model;
-using NewLife.Net.Handlers;
-#if !NET4
-using TaskEx = System.Threading.Tasks.Task;
-#endif
 
 namespace NewLife.Net
 {
@@ -410,15 +405,15 @@ namespace NewLife.Net
         {
             var session = sender as INetSession;
 
-            OnReceive(session, e.Stream);
+            OnReceive(session, e.Packet);
 
             Received?.Invoke(sender, e);
         }
 
         /// <summary>收到数据时，最原始的数据处理，但不影响会话内部的数据处理</summary>
         /// <param name="session"></param>
-        /// <param name="stream"></param>
-        protected virtual void OnReceive(INetSession session, Stream stream) { }
+        /// <param name="pk"></param>
+        protected virtual void OnReceive(INetSession session, Packet pk) { }
 
         /// <summary>错误发生/断开连接时。sender是ISocketSession</summary>
         public event EventHandler<ExceptionEventArgs> Error;
@@ -495,10 +490,10 @@ namespace NewLife.Net
             var ts = new List<Task>();
             foreach (var item in Sessions)
             {
-                ts.Add(TaskEx.Run(() => item.Value.Send(buffer)));
+                ts.Add(Task.Run(() => item.Value.Send(buffer)));
             }
 
-            return TaskEx.WhenAll(ts).ContinueWith(t => Sessions.Count);
+            return Task.WhenAll(ts).ContinueWith(t => Sessions.Count);
         }
         #endregion
 
@@ -553,12 +548,7 @@ namespace NewLife.Net
                         //svr.AddressFamily = family;
 
                         // 协议端口不能是已经被占用
-                        //if (!NetHelper.IsUsed(svr.Local.ProtocolType, svr.Local.Address, svr.Port)) list.Add(svr);
-#if __CORE__
-                        list.Add(svr);
-#else
                         if (!svr.Local.CheckPort()) list.Add(svr);
-#endif
                     }
                     break;
                 default:

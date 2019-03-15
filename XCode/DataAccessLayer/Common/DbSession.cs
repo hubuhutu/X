@@ -78,77 +78,6 @@ namespace XCode.DataAccessLayer
         #endregion
 
         #region 打开/关闭
-        ///// <summary>连接是否已经打开</summary>
-        //public Boolean Opened
-        //{
-        //    get
-        //    {
-        //        var conn = Conn;
-        //        if (conn == null) return false;
-
-        //        try
-        //        {
-        //            return conn.State != ConnectionState.Closed;
-        //        }
-        //        catch (ObjectDisposedException)
-        //        {
-        //            return false;
-        //        }
-        //    }
-        //}
-
-        ///// <summary>打开</summary>
-        //public virtual void Open()
-        //{
-        //    var tid = Thread.CurrentThread.ManagedThreadId;
-        //    if (ThreadID != tid) DAL.WriteLog("本会话由线程{0}创建，当前线程{1}非法使用该会话！", ThreadID, tid);
-
-        //    if (Conn == null) Conn = Database.Pool.Get();
-        //}
-
-        ///// <summary>关闭</summary>
-        //public void Close()
-        //{
-        //    // 有可能是GC调用关闭
-        //    //var tid = Thread.CurrentThread.ManagedThreadId;
-        //    //if (ThreadID != tid) DAL.WriteLog("本会话由线程{0}创建，当前线程{1}非法使用该会话！", ThreadID, tid);
-
-        //    var conn = Conn;
-        //    if (conn != null)
-        //    {
-        //        Conn = null;
-        //        Database.Pool.Put(conn);
-        //    }
-        //}
-
-        ///// <summary>自动关闭。启用事务后，不关闭连接。</summary>
-        //public virtual void AutoClose()
-        //{
-        //    if (Transaction != null || !Opened) return;
-
-        //    // 检查是否支持自动关闭
-        //    if (_EnableAutoClose != null)
-        //    {
-        //        if (!_EnableAutoClose.Value) return;
-        //    }
-        //    else
-        //    {
-        //        if (!Database.AutoClose) return;
-        //    }
-
-        //    Close();
-        //}
-
-        //private Boolean? _EnableAutoClose;
-        ///// <summary>设置自动关闭。启用、禁用、继承</summary>
-        ///// <param name="enable"></param>
-        //public void SetAutoClose(Boolean? enable)
-        //{
-        //    _EnableAutoClose = enable;
-
-        //    if (enable == null || enable.Value) AutoClose();
-        //}
-
         /// <summary>当异常发生时触发。关闭数据库连接，或者返还连接到连接池。</summary>
         /// <param name="ex"></param>
         /// <returns></returns>
@@ -199,10 +128,9 @@ namespace XCode.DataAccessLayer
             try
             {
                 var tr = Transaction;
-                if (tr == null)
+                if (tr == null || tr is DisposeBase db && db.Disposed)
                 {
                     tr = new Transaction(this, level);
-                    tr.Completed += (s, e) => { Transaction = null; /*AutoClose();*/ };
 
                     Transaction = tr;
                 }
@@ -230,6 +158,10 @@ namespace XCode.DataAccessLayer
             {
                 throw OnException(ex);
             }
+            finally
+            {
+                if (tr.Count == 0) Transaction = null;
+            }
 
             return tr.Count;
         }
@@ -249,6 +181,10 @@ namespace XCode.DataAccessLayer
             catch (DbException ex)
             {
                 if (!ignoreException) throw OnException(ex);
+            }
+            finally
+            {
+                if (tr.Count == 0) Transaction = null;
             }
 
             return tr.Count;
@@ -516,130 +452,29 @@ namespace XCode.DataAccessLayer
 
         #region 批量操作
         /// <summary>批量插入</summary>
+        /// <param name="tableName">表名</param>
         /// <param name="columns">要插入的字段，默认所有字段</param>
         /// <param name="list">实体列表</param>
         /// <returns></returns>
-        public virtual Int32 Insert(IDataColumn[] columns, IEnumerable<IIndexAccessor> list) => throw new NotSupportedException();
+        public virtual Int32 Insert(String tableName, IDataColumn[] columns, IEnumerable<IIndexAccessor> list) => throw new NotSupportedException();
+
+        /// <summary>批量更新</summary>
+        /// <param name="tableName">表名</param>
+        /// <param name="columns">要更新的字段，默认所有字段</param>
+        /// <param name="updateColumns">要更新的字段，默认脏数据</param>
+        /// <param name="addColumns">要累加更新的字段，默认累加</param>
+        /// <param name="list">实体列表</param>
+        /// <returns></returns>
+        public virtual Int32 Update(String tableName, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list) => throw new NotSupportedException();
 
         /// <summary>批量插入或更新</summary>
+        /// <param name="tableName">表名</param>
         /// <param name="columns">要插入的字段，默认所有字段</param>
         /// <param name="updateColumns">主键已存在时，要更新的字段</param>
         /// <param name="addColumns">主键已存在时，要累加更新的字段</param>
         /// <param name="list">实体列表</param>
         /// <returns></returns>
-        public virtual Int32 InsertOrUpdate(IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list) => throw new NotSupportedException();
-        #endregion
-
-        #region 异步操作
-#if !NET4
-        ///// <summary>异步打开</summary>
-        ///// <returns></returns>
-        //public virtual async Task OpenAsync()
-        //{
-        //    var tid = Thread.CurrentThread.ManagedThreadId;
-        //    if (ThreadID != tid) DAL.WriteLog("本会话由线程{0}创建，当前线程{1}非法使用该会话！", ThreadID, tid);
-
-        //    var conn = Conn;
-        //    if (conn == null || conn.State != ConnectionState.Closed) return;
-
-        //    await conn.OpenAsync();
-        //}
-
-        /// <summary>执行SQL查询，返回记录集</summary>
-        /// <param name="sql">SQL语句</param>
-        /// <param name="ps">命令参数</param>
-        /// <returns></returns>
-        public virtual async Task<DbTable> QueryAsync(String sql, params IDataParameter[] ps)
-        {
-            using (var cmd = OnCreateCommand(sql, CommandType.Text, ps))
-            {
-                Transaction?.Check(cmd, false);
-
-                QueryTimes++;
-                var text = WriteSQL(cmd);
-
-                var conn = Database.Pool.Get();
-                try
-                {
-                    if (cmd.Connection == null) cmd.Connection = conn;
-
-                    BeginTrace();
-
-                    using (var dr = await cmd.ExecuteReaderAsync())
-                    {
-                        var ds = new DbTable();
-                        OnFill(ds, dr);
-                        ds.Read(dr);
-
-                        return ds;
-                    }
-                }
-                catch (DbException ex)
-                {
-                    // 数据库异常最好销毁连接
-                    cmd.Connection.TryDispose();
-
-                    throw OnException(ex, cmd, text);
-                }
-                finally
-                {
-                    Database.Pool.Put(conn);
-                    EndTrace(cmd, text);
-                }
-            }
-        }
-
-        public virtual async Task<Int32> ExecuteNonQueryAsync(DbCommand cmd)
-        {
-            Transaction?.Check(cmd, true);
-
-            ExecuteTimes++;
-            var text = WriteSQL(cmd);
-
-            var conn = Database.Pool.Get();
-            try
-            {
-                if (cmd.Connection == null) cmd.Connection = conn;
-
-                BeginTrace();
-                return await cmd.ExecuteNonQueryAsync();
-            }
-            catch (DbException ex)
-            {
-                throw OnException(ex, cmd, text);
-            }
-            finally
-            {
-                Database.Pool.Put(conn);
-                EndTrace(cmd, text);
-            }
-        }
-
-        public virtual async Task<T> ExecuteScalarAsync<T>(DbCommand cmd)
-        {
-            QueryTimes++;
-
-            var text = WriteSQL(cmd);
-            try
-            {
-                BeginTrace();
-
-                var rs = await cmd.ExecuteScalarAsync();
-                if (rs == null || rs == DBNull.Value) return default(T);
-                if (rs is T) return (T)rs;
-
-                return (T)Reflect.ChangeType(rs, typeof(T));
-            }
-            catch (DbException ex)
-            {
-                throw OnException(ex, cmd, text);
-            }
-            finally
-            {
-                EndTrace(cmd, text);
-            }
-        }
-#endif
+        public virtual Int32 Upsert(String tableName, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list) => throw new NotSupportedException();
         #endregion
 
         #region 高级
@@ -654,12 +489,6 @@ namespace XCode.DataAccessLayer
         #endregion
 
         #region 架构
-        private DictionaryCache<String, DataTable> _schCache = new DictionaryCache<String, DataTable>(StringComparer.OrdinalIgnoreCase)
-        {
-            Expire = 10,
-            Period = 10 * 60,
-        };
-
         /// <summary>返回数据源的架构信息。缓存10分钟</summary>
         /// <param name="conn">连接</param>
         /// <param name="collectionName">指定要返回的架构的名称。</param>
@@ -671,13 +500,10 @@ namespace XCode.DataAccessLayer
             var key = "" + collectionName;
             if (restrictionValues != null && restrictionValues.Length > 0) key += "_" + String.Join("_", restrictionValues);
 
-            var dt = _schCache[key];
+            var db = Database as DbBase;
+            var dt = db._SchemaCache[key];
             if (dt == null)
             {
-                //if (Conn != null)
-                //    dt = GetSchemaInternal(Conn, key, collectionName, restrictionValues);
-                //else
-                //{
                 var conn2 = conn ?? Database.Pool.Get();
                 try
                 {
@@ -687,9 +513,8 @@ namespace XCode.DataAccessLayer
                 {
                     if (conn == null) Database.Pool.Put(conn2);
                 }
-                //}
 
-                _schCache[key] = dt;
+                db._SchemaCache[key] = dt;
             }
 
             return dt;
@@ -749,14 +574,10 @@ namespace XCode.DataAccessLayer
         /// <param name="sql"></param>
         public void WriteSQL(String sql)
         {
-#if !__CORE__
+            if (sql.IsNullOrEmpty()) return;
+
             // 如果页面设定有XCode_SQLList列表，则往列表写入SQL语句
-            var context = HttpContext.Current;
-            if (context != null)
-            {
-                if (context.Items["XCode_SQLList"] is List<String> list) list.Add(sql);
-            }
-#endif
+            DAL.LocalFilter?.Invoke(sql);
 
             if (!ShowSQL) return;
 
@@ -772,58 +593,50 @@ namespace XCode.DataAccessLayer
 
         private String GetSql(DbCommand cmd)
         {
-            var sql = cmd.CommandText;
-            var ps = cmd.Parameters;
-            if (ps != null && ps.Count > 0)
+            try
             {
-                var sb = Pool.StringBuilder.Get();
-                sb.Append(sql);
-                sb.Append(" [");
-                for (var i = 0; i < ps.Count; i++)
+                var sql = cmd.CommandText;
+                var ps = cmd.Parameters;
+                if (ps != null && ps.Count > 0)
                 {
-                    if (i > 0) sb.Append(", ");
-                    var v = ps[i].Value;
-                    var sv = "";
-                    if (v is Byte[])
+                    var sb = Pool.StringBuilder.Get();
+                    sb.Append(sql);
+                    sb.Append(" [");
+                    for (var i = 0; i < ps.Count; i++)
                     {
-                        var bv = v as Byte[];
-                        if (bv.Length > 8)
-                            sv = String.Format("[{0}]0x{1}...", bv.Length, BitConverter.ToString(bv, 0, 8));
+                        if (i > 0) sb.Append(", ");
+                        var v = ps[i].Value;
+                        var sv = "";
+                        if (v is Byte[])
+                        {
+                            var bv = v as Byte[];
+                            if (bv.Length > 8)
+                                sv = String.Format("[{0}]0x{1}...", bv.Length, BitConverter.ToString(bv, 0, 8));
+                            else
+                                sv = String.Format("[{0}]0x{1}", bv.Length, BitConverter.ToString(bv));
+                        }
+                        else if (v is String str && str.Length > 64)
+                            sv = String.Format("[{0}]{1}...", str.Length, str.Substring(0, 64));
                         else
-                            sv = String.Format("[{0}]0x{1}", bv.Length, BitConverter.ToString(bv));
+                            sv = "{0}".F(v);
+                        sb.AppendFormat("{0}={1}", ps[i].ParameterName, sv);
                     }
-                    else if (v is String str && str.Length > 64)
-                        sv = String.Format("[{0}]{1}...", str.Length, str.Substring(0, 64));
-                    else
-                        sv = "{0}".F(v);
-                    sb.AppendFormat("{0}={1}", ps[i].ParameterName, sv);
+                    sb.Append("]");
+                    sql = sb.Put(true);
                 }
-                sb.Append("]");
-                sql = sb.Put(true);
+
+                // 阶段超长字符串
+                if (sql.Length > 1024) sql = sql.Substring(0, 512) + "..." + sql.Substring(sql.Length - 512);
+
+                return sql;
             }
-
-            // 阶段超长字符串
-            if (sql.Length > 1024) sql = sql.Substring(0, 512) + "..." + sql.Substring(sql.Length - 512);
-
-            return sql;
+            catch { return null; }
         }
 
         public String WriteSQL(DbCommand cmd)
         {
-            var flag = ShowSQL;
-#if !__CORE__
             // 如果页面设定有XCode_SQLList列表，则往列表写入SQL语句
-            var context = HttpContext.Current;
-            if (context != null)
-            {
-                if (context.Items["XCode_SQLList"] is List<String> list) flag = true;
-            }
-#endif
-
-            if (!flag) return null;
-
-            //var sql = cmd.CommandText;
-            //if (cmd.CommandType != CommandType.Text) sql = String.Format("[{0}]{1}", cmd.CommandType, sql);
+            if (!ShowSQL && DAL.LocalFilter == null) return null;
 
             var sql = GetSql(cmd);
 
@@ -832,18 +645,10 @@ namespace XCode.DataAccessLayer
             return sql;
         }
 
-        ///// <summary>输出日志</summary>
-        ///// <param name="msg"></param>
-        //public static void WriteLog(String msg) { DAL.WriteLog(msg); }
-
         /// <summary>输出日志</summary>
         /// <param name="format"></param>
         /// <param name="args"></param>
-        public static void WriteLog(String format, params Object[] args)
-        {
-            //DAL.WriteLog(format, args);
-            XTrace.WriteLine(format, args);
-        }
+        public static void WriteLog(String format, params Object[] args) => XTrace.WriteLine(format, args);
         #endregion
 
         #region SQL时间跟踪
@@ -871,6 +676,7 @@ namespace XCode.DataAccessLayer
             if (_swSql.ElapsedMilliseconds < (Database as DbBase).TraceSQLTime) return;
 
             if (sql.IsNullOrEmpty()) sql = GetSql(cmd);
+            if (sql.IsNullOrEmpty()) return;
 
             // 同一个SQL只需要报警一次
             if (_trace_sqls.Contains(sql)) return;
@@ -882,10 +688,6 @@ namespace XCode.DataAccessLayer
                 _trace_sqls.Add(sql);
             }
 
-#if !__CORE__
-            var obj = new SQLRunEvent() { Sql = sql, RunTime = _swSql.ElapsedMilliseconds };
-            EventBus.Instance.Publish(obj);
-#endif
             XTrace.WriteLine("SQL耗时较长，建议优化 {0:n0}毫秒 {1}", _swSql.ElapsedMilliseconds, sql);
         }
         #endregion

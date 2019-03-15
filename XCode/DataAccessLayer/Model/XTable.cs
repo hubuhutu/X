@@ -203,7 +203,7 @@ namespace XCode.DataAccessLayer
         #region 导入导出
         /// <summary>导出</summary>
         /// <returns></returns>
-        public String Export() { return this.ToXml(); }
+        public String Export() => this.ToXml();
 
         /// <summary>导入</summary>
         /// <param name="xml"></param>
@@ -219,7 +219,7 @@ namespace XCode.DataAccessLayer
         #region ICloneable 成员
         /// <summary>克隆</summary>
         /// <returns></returns>
-        Object ICloneable.Clone() { return Clone(); }
+        Object ICloneable.Clone() => Clone();
 
         /// <summary>克隆</summary>
         /// <returns></returns>
