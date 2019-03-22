@@ -7,8 +7,8 @@
     <Description>数据中间件，MySQL、SQLite、SqlServer、Oracle</Description>
     <Company>新生命开发团队</Company>
     <Copyright>©2002-2019 新生命开发团队</Copyright>
-    <Version>9.11.2019.0311</Version>
-    <FileVersion>9.11.2019.0311</FileVersion>
+    <Version>9.11.2019.0320</Version>
+    <FileVersion>9.11.2019.0320</FileVersion>
     <AssemblyVersion>9.11.*</AssemblyVersion>
     <Deterministic>false</Deterministic>
     <OutputPath>..\..\Bin</OutputPath>
@@ -20,7 +20,7 @@
     <PackageId>NewLife.XCode</PackageId>
     <Authors>$(Company)</Authors>
     <ProjectUrl>https://github.com/NewLifeX</ProjectUrl>
-    <PackageIconUrl>http://www.NewLifeX.com/favicon.ico</PackageIconUrl>
+    <PackageIconUrl>http://www.NewLifeX.com/logo.png</PackageIconUrl>
     <RepositoryUrl>https://github.com/NewLifeX/X</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>新生命团队;X组件;NewLife;$(AssemblyName)</PackageTags>
@@ -77,11 +77,11 @@
   <ItemGroup>
     <Content Include="Build.tt">
       <Pack>true</Pack>
-      <PackagePath>Entity\</PackagePath>
+      <PackagePath>content\Entity\</PackagePath>
     </Content>
     <Content Include="Model.xml">
       <Pack>true</Pack>
-      <PackagePath>Entity\</PackagePath>
+      <PackagePath>content\Entity\</PackagePath>
     </Content>
   </ItemGroup>
 
