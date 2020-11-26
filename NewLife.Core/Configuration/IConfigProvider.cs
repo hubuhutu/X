@@ -313,7 +313,8 @@ namespace NewLife.Configuration
             {
                 var val = elementType.CreateInstance();
                 MapTo(section.Childs[i], val);
-                list[i] = val;
+                //list[i] = val;
+                list.Add(val);
             }
         }
 
