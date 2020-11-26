@@ -4,6 +4,7 @@ using System.Data;
 using System.Data.Common;
 using System.Linq;
 using System.Net;
+using NewLife;
 using NewLife.Collections;
 using NewLife.Data;
 using NewLife.Reflection;
@@ -29,7 +30,7 @@ namespace XCode.DataAccessLayer
                         //_Factory = GetProviderFactory("NewLife.MySql.dll", "NewLife.MySql.MySqlClientFactory") ??
                         //           GetProviderFactory("MySql.Data.dll", "MySql.Data.MySqlClient.MySqlClientFactory");
                         // MewLife.MySql 在开发过程中，数据驱动下载站点没有它的包，暂时不支持下载
-                        _Factory = GetProviderFactory(null, "NewLife.MySql.MySqlClientFactory", true) ??
+                        _Factory = GetProviderFactory(null, "NewLife.MySql.MySqlClientFactory", true, true) ??
                                   GetProviderFactory("MySql.Data.dll", "MySql.Data.MySqlClient.MySqlClientFactory");
                     }
                 }
@@ -40,7 +41,7 @@ namespace XCode.DataAccessLayer
 
         const String Server_Key = "Server";
         const String CharSet = "CharSet";
-        const String AllowZeroDatetime = "Allow Zero Datetime";
+        //const String AllowZeroDatetime = "Allow Zero Datetime";
         const String MaxPoolSize = "MaxPoolSize";
         const String Sslmode = "Sslmode";
         protected override void OnSetConnectionString(ConnectionStringBuilder builder)
@@ -63,6 +64,10 @@ namespace XCode.DataAccessLayer
 
             // 如未设置Sslmode，默认为none
             if (builder[Sslmode] == null) builder.TryAdd(Sslmode, "none");
+
+            // 如果是新版驱动v8.0，需要设置获取公钥
+            var version = Factory?.GetType().Assembly.GetName().Version;
+            if (version != null && version.Major >= 8) builder.TryAdd("AllowPublicKeyRetrieval", "true");
         }
         #endregion
 
@@ -92,41 +97,51 @@ namespace XCode.DataAccessLayer
         /// <param name="maximumRows">最大返回行数，0表示所有行</param>
         /// <param name="keyColumn">主键列。用于not in分页</param>
         /// <returns></returns>
-        public override String PageSplit(String sql, Int64 startRowIndex, Int64 maximumRows, String keyColumn)
+        public override String PageSplit(String sql, Int64 startRowIndex, Int64 maximumRows, String keyColumn) => PageSplitByLimit(sql, startRowIndex, maximumRows);
+
+        /// <summary>构造分页SQL</summary>
+        /// <param name="builder">查询生成器</param>
+        /// <param name="startRowIndex">开始行，0表示第一行</param>
+        /// <param name="maximumRows">最大返回行数，0表示所有行</param>
+        /// <returns>分页SQL</returns>
+        public override SelectBuilder PageSplit(SelectBuilder builder, Int64 startRowIndex, Int64 maximumRows) => PageSplitByLimit(builder, startRowIndex, maximumRows);
+
+        /// <summary>已重写。获取分页</summary>
+        /// <param name="sql">SQL语句</param>
+        /// <param name="startRowIndex">开始行，0表示第一行</param>
+        /// <param name="maximumRows">最大返回行数，0表示所有行</param>
+        /// <returns></returns>
+        public static String PageSplitByLimit(String sql, Int64 startRowIndex, Int64 maximumRows)
         {
             // 从第一行开始，不需要分页
             if (startRowIndex <= 0)
             {
                 if (maximumRows < 1) return sql;
 
-                return "{0} limit {1}".F(sql, maximumRows);
+                return $"{sql} limit {maximumRows}";
             }
             if (maximumRows < 1) throw new NotSupportedException("不支持取第几条数据之后的所有数据！");
 
-            return "{0} limit {1}, {2}".F(sql, startRowIndex, maximumRows);
+            return $"{sql} limit {startRowIndex}, {maximumRows}";
         }
 
         /// <summary>构造分页SQL</summary>
-        /// <remarks>
-        /// 两个构造分页SQL的方法，区别就在于查询生成器能够构造出来更好的分页语句，尽可能的避免子查询。
-        /// MS体系的分页精髓就在于唯一键，当唯一键带有Asc/Desc/Unkown等排序结尾时，就采用最大最小值分页，否则使用较次的TopNotIn分页。
-        /// TopNotIn分页和MaxMin分页的弊端就在于无法完美的支持GroupBy查询分页，只能查到第一页，往后分页就不行了，因为没有主键。
-        /// </remarks>
         /// <param name="builder">查询生成器</param>
         /// <param name="startRowIndex">开始行，0表示第一行</param>
         /// <param name="maximumRows">最大返回行数，0表示所有行</param>
         /// <returns>分页SQL</returns>
-        public override SelectBuilder PageSplit(SelectBuilder builder, Int64 startRowIndex, Int64 maximumRows)
+        public static SelectBuilder PageSplitByLimit(SelectBuilder builder, Int64 startRowIndex, Int64 maximumRows)
         {
             // 从第一行开始，不需要分页
             if (startRowIndex <= 0)
             {
-                if (maximumRows > 0) builder.Limit += " limit {0}".F(maximumRows);
+                if (maximumRows > 0) builder.Limit = $"limit {maximumRows}";
                 return builder;
             }
             if (maximumRows < 1) throw new NotSupportedException("不支持取第几条数据之后的所有数据！");
 
-            builder.Limit += " limit {0}, {1}".F(startRowIndex, maximumRows);
+            builder.Limit = $"limit {startRowIndex}, {maximumRows}";
+
             return builder;
         }
         #endregion
@@ -190,25 +205,25 @@ namespace XCode.DataAccessLayer
         /// <summary>创建参数</summary>
         /// <param name="name">名称</param>
         /// <param name="value">值</param>
-        /// <param name="field">字段</param>
+        /// <param name="type">类型</param>
         /// <returns></returns>
-        public override IDataParameter CreateParameter(String name, Object value, IDataColumn field = null)
+        public override IDataParameter CreateParameter(String name, Object value, Type type = null)
         {
-            var dp = base.CreateParameter(name, value, field);
+            var dp = base.CreateParameter(name, value, type);
 
-            var type = field?.DataType;
+            //var type = field?.DataType;
             if (type == null) type = value?.GetType();
 
             // MySql的枚举要用 DbType.String
             if (type == typeof(Boolean))
             {
                 var v = value.ToBoolean();
-                if (field?.Table != null && EnumTables.Contains(field.Table.TableName))
-                {
-                    dp.DbType = DbType.String;
-                    dp.Value = value.ToBoolean() ? 'Y' : 'N';
-                }
-                else
+                //if (field?.Table != null && EnumTables.Contains(field.Table.TableName))
+                //{
+                //    dp.DbType = DbType.String;
+                //    dp.Value = value.ToBoolean() ? 'Y' : 'N';
+                //}
+                //else
                 {
                     dp.DbType = DbType.Int16;
                     dp.Value = v ? 1 : 0;
@@ -225,7 +240,7 @@ namespace XCode.DataAccessLayer
         /// <param name="left"></param>
         /// <param name="right"></param>
         /// <returns></returns>
-        public override String StringConcat(String left, String right) => String.Format("concat({0},{1})", (!String.IsNullOrEmpty(left) ? left : "\'\'"), (!String.IsNullOrEmpty(right) ? right : "\'\'"));
+        public override String StringConcat(String left, String right) => $"concat({(!String.IsNullOrEmpty(left) ? left : "\'\'")},{(!String.IsNullOrEmpty(right) ? right : "\'\'")})";
         #endregion
 
         #region 跨版本兼容
@@ -280,24 +295,24 @@ namespace XCode.DataAccessLayer
         updatetime=values(updatetime);
          */
 
-        private String GetBatchSql(String tableName, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list)
+        private String GetBatchSql(IDataTable table, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IExtend> list)
         {
             var sb = Pool.StringBuilder.Get();
             var db = Database as DbBase;
 
             // 字段列表
             //if (columns == null) columns = table.Columns.ToArray();
-            sb.AppendFormat("Insert Into {0}(", db.FormatTableName(tableName));
+            sb.AppendFormat("Insert Into {0}(", db.FormatName(table));
             foreach (var dc in columns)
             {
                 // 取消对主键的过滤，避免列名和值无法一一对应的问题
                 //if (dc.Identity) continue;
 
-                sb.Append(db.FormatName(dc.ColumnName));
-                sb.Append(",");
+                sb.Append(db.FormatName(dc));
+                sb.Append(',');
             }
             sb.Length--;
-            sb.Append(")");
+            sb.Append(')');
 
             // 值列表
             sb.Append(" Values");
@@ -319,12 +334,12 @@ namespace XCode.DataAccessLayer
                             if (dc.Identity)
                                 cs.Add(0);
                             else
-                                cs.Add(dt.GetColumn(dc.Name));
+                                cs.Add(dt.GetColumn(dc.ColumnName));
                         }
                         ids = cs.ToArray();
                     }
 
-                    sb.Append("(");
+                    sb.Append('(');
                     var row = dt.Rows[dr.Index];
                     for (var i = 0; i < columns.Length; i++)
                     {
@@ -333,7 +348,7 @@ namespace XCode.DataAccessLayer
 
                         var value = row[ids[i]];
                         sb.Append(db.FormatValue(dc, value));
-                        sb.Append(",");
+                        sb.Append(',');
                     }
                     sb.Length--;
                     sb.Append("),");
@@ -343,14 +358,14 @@ namespace XCode.DataAccessLayer
             {
                 foreach (var entity in list)
                 {
-                    sb.Append("(");
+                    sb.Append('(');
                     foreach (var dc in columns)
                     {
                         //if (dc.Identity) continue;
 
                         var value = entity[dc.Name];
                         sb.Append(db.FormatValue(dc, value));
-                        sb.Append(",");
+                        sb.Append(',');
                     }
                     sb.Length--;
                     sb.Append("),");
@@ -369,19 +384,19 @@ namespace XCode.DataAccessLayer
                         if (dc.Identity || dc.PrimaryKey) continue;
 
                         if (updateColumns.Contains(dc.Name) && (addColumns == null || !addColumns.Contains(dc.Name)))
-                            sb.AppendFormat("{0}=Values({0}),", db.FormatName(dc.ColumnName));
+                            sb.AppendFormat("{0}=Values({0}),", db.FormatName(dc));
                     }
                     sb.Length--;
                 }
                 if (addColumns != null && addColumns.Count > 0)
                 {
-                    sb.Append(",");
+                    sb.Append(',');
                     foreach (var dc in columns)
                     {
                         if (dc.Identity || dc.PrimaryKey) continue;
 
                         if (addColumns.Contains(dc.Name))
-                            sb.AppendFormat("{0}={0}+Values({0}),", db.FormatName(dc.ColumnName));
+                            sb.AppendFormat("{0}={0}+Values({0}),", db.FormatName(dc));
                     }
                     sb.Length--;
                 }
@@ -390,38 +405,44 @@ namespace XCode.DataAccessLayer
             return sb.Put(true);
         }
 
-        public override Int32 Insert(String tableName, IDataColumn[] columns, IEnumerable<IIndexAccessor> list)
+        public override Int32 Insert(IDataTable table, IDataColumn[] columns, IEnumerable<IExtend> list)
         {
-            // 分批
-            var batchSize = 10_000;
-            var rs = 0;
-            for (var i = 0; i < list.Count();)
-            {
-                var es = list.Skip(i).Take(batchSize).ToList();
-                var sql = GetBatchSql(tableName, columns, null, null, es);
-                rs += Execute(sql);
+            var sql = GetBatchSql(table, columns, null, null, list);
+            return Execute(sql);
 
-                i += es.Count;
-            }
+            //// 分批
+            //var batchSize = (Database as DbBase).BatchSize;
+            //var rs = 0;
+            //for (var i = 0; i < list.Count();)
+            //{
+            //    var es = list.Skip(i).Take(batchSize).ToList();
+            //    var sql = GetBatchSql(table, columns, null, null, es);
+            //    rs += Execute(sql);
 
-            return rs;
+            //    i += es.Count;
+            //}
+
+            //return rs;
         }
 
-        public override Int32 Upsert(String tableName, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list)
+        public override Int32 Upsert(IDataTable table, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IExtend> list)
         {
-            // 分批
-            var batchSize = 10_000;
-            var rs = 0;
-            for (var i = 0; i < list.Count();)
-            {
-                var es = list.Skip(i).Take(batchSize).ToList();
-                var sql = GetBatchSql(tableName, columns, updateColumns, addColumns, es);
-                rs += Execute(sql);
+            var sql = GetBatchSql(table, columns, updateColumns, addColumns, list);
+            return Execute(sql);
 
-                i += es.Count;
-            }
+            //// 分批
+            //var batchSize = (Database as DbBase).BatchSize;
+            //var rs = 0;
+            //for (var i = 0; i < list.Count();)
+            //{
+            //    var es = list.Skip(i).Take(batchSize).ToList();
+            //    var sql = GetBatchSql(table, columns, updateColumns, addColumns, es);
+            //    rs += Execute(sql);
 
-            return rs;
+            //    i += es.Count;
+            //}
+
+            //return rs;
         }
         #endregion
     }
@@ -447,7 +468,7 @@ namespace XCode.DataAccessLayer
         }
 
         /// <summary>数据类型映射</summary>
-        private static Dictionary<Type, String[]> _DataTypes = new Dictionary<Type, String[]>
+        private static readonly Dictionary<Type, String[]> _DataTypes = new Dictionary<Type, String[]>
         {
             { typeof(Byte[]), new String[] { "BLOB", "TINYBLOB", "MEDIUMBLOB", "LONGBLOB", "binary({0})", "varbinary({0})" } },
             //{ typeof(TimeSpan), new String[] { "TIME" } },
@@ -463,7 +484,8 @@ namespace XCode.DataAccessLayer
             { typeof(Double), new String[] { "DOUBLE" } },
             { typeof(Decimal), new String[] { "DECIMAL({0}, {1})" } },
             { typeof(DateTime), new String[] { "DATETIME", "DATE", "TIMESTAMP", "TIME" } },
-            { typeof(String), new String[] { "NVARCHAR({0})", "TEXT", "CHAR({0})", "NCHAR({0})", "VARCHAR({0})", "SET", "ENUM", "TINYTEXT", "TEXT", "MEDIUMTEXT", "LONGTEXT" } },
+            // mysql中nvarchar会变成utf8字符集的varchar，而不会取数据库的utf8mb4
+            { typeof(String), new String[] { "VARCHAR({0})", "LONGTEXT", "TEXT", "CHAR({0})", "NCHAR({0})", "NVARCHAR({0})", "SET", "ENUM", "TINYTEXT", "TEXT", "MEDIUMTEXT" } },
             { typeof(Boolean), new String[] { "TINYINT" } },
         };
         #endregion
@@ -473,78 +495,89 @@ namespace XCode.DataAccessLayer
         {
             var ss = Database.CreateSession();
             var db = Database.DatabaseName;
-
-            var sql = $"SHOW TABLE STATUS FROM `{db}`";
-            var dt = ss.Query(sql, null);
-            if (dt.Rows.Count == 0) return null;
-
             var list = new List<IDataTable>();
-            var hs = new HashSet<String>(names ?? new String[0], StringComparer.OrdinalIgnoreCase);
 
-            // 所有表
-            foreach (var dr in dt)
+            var old = ss.ShowSQL;
+            ss.ShowSQL = false;
+            try
             {
-                var name = dr["Name"] + "";
-                if (name.IsNullOrEmpty() || hs.Count > 0 && !hs.Contains(name)) continue;
+                var sql = $"SHOW TABLE STATUS FROM `{db}`";
+                var dt = ss.Query(sql, null);
+                if (dt.Rows.Count == 0) return null;
 
-                var table = DAL.CreateTable();
-                table.TableName = name;
-                table.Description = dr["Comment"] + "";
+                var hs = new HashSet<String>(names ?? new String[0], StringComparer.OrdinalIgnoreCase);
 
-                #region 字段
-                sql = $"SHOW FULL COLUMNS FROM `{db}`.`{name}`";
-                var dcs = ss.Query(sql, null);
-                foreach (var dc in dcs)
+                // 所有表
+                foreach (var dr in dt)
                 {
-                    var field = table.CreateColumn();
+                    var name = dr["Name"] + "";
+                    if (name.IsNullOrEmpty() || hs.Count > 0 && !hs.Contains(name)) continue;
 
-                    field.ColumnName = dc["Field"] + "";
-                    field.RawType = dc["Type"] + "";
-                    field.DataType = GetDataType(field.RawType);
-                    field.Description = dc["Comment"] + "";
+                    var table = DAL.CreateTable();
+                    table.TableName = name;
+                    table.Description = dr["Comment"] + "";
 
-                    if (dc["Extra"] + "" == "auto_increment") field.Identity = true;
-                    if (dc["Key"] + "" == "PRI") field.PrimaryKey = true;
-                    if (dc["Null"] + "" == "YES") field.Nullable = true;
-
-                    field.Length = field.RawType.Substring("(", ")").ToInt();
-
-                    if (field.DataType == null)
+                    #region 字段
+                    sql = $"SHOW FULL COLUMNS FROM `{db}`.`{name}`";
+                    var dcs = ss.Query(sql, null);
+                    foreach (var dc in dcs)
                     {
-                        if (field.RawType.StartsWithIgnoreCase("varchar", "nvarchar")) field.DataType = typeof(String);
+                        var field = table.CreateColumn();
+
+                        field.ColumnName = dc["Field"] + "";
+                        field.RawType = dc["Type"] + "";
+                        field.DataType = GetDataType(field.RawType);
+                        field.Description = dc["Comment"] + "";
+
+                        if (dc["Extra"] + "" == "auto_increment") field.Identity = true;
+                        if (dc["Key"] + "" == "PRI") field.PrimaryKey = true;
+                        if (dc["Null"] + "" == "YES") field.Nullable = true;
+
+                        field.Length = field.RawType.Substring("(", ")").ToInt();
+
+                        if (field.DataType == null)
+                        {
+                            if (field.RawType.StartsWithIgnoreCase("varchar", "nvarchar")) field.DataType = typeof(String);
+                        }
+
+                        // MySql中没有布尔型，这里处理YN枚举作为布尔型
+                        if (field.RawType == "enum('N','Y')" || field.RawType == "enum('Y','N')") field.DataType = typeof(Boolean);
+
+                        field.Fix();
+
+                        table.Columns.Add(field);
                     }
+                    #endregion
 
-                    // MySql中没有布尔型，这里处理YN枚举作为布尔型
-                    if (field.RawType == "enum('N','Y')" || field.RawType == "enum('Y','N')") field.DataType = typeof(Boolean);
+                    #region 索引
+                    sql = $"SHOW INDEX FROM `{db}`.`{name}`";
+                    var dis = ss.Query(sql, null);
+                    foreach (var dr2 in dis)
+                    {
+                        var dname = dr2["Key_name"] + "";
+                        var di = table.Indexes.FirstOrDefault(e => e.Name == dname) ?? table.CreateIndex();
+                        di.Name = dname;
+                        di.Unique = dr2.Get<Int32>("Non_unique") == 0;
 
-                    table.Columns.Add(field);
+                        var cname = dr2.Get<String>("Column_name");
+                        var cs = new List<String>();
+                        if (di.Columns != null && di.Columns.Length > 0) cs.AddRange(di.Columns);
+                        cs.Add(cname);
+                        di.Columns = cs.ToArray();
+
+                        table.Indexes.Add(di);
+                    }
+                    #endregion
+
+                    // 修正关系数据
+                    table.Fix();
+
+                    list.Add(table);
                 }
-                #endregion
-
-                #region 索引
-                sql = $"SHOW INDEX FROM `{db}`.`{name}`";
-                var dis = ss.Query(sql, null);
-                foreach (var dr2 in dis)
-                {
-                    var dname = dr2["Key_name"] + "";
-                    var di = table.Indexes.FirstOrDefault(e => e.Name == dname) ?? table.CreateIndex();
-                    di.Name = dname;
-                    di.Unique = dr2.Get<Int32>("Non_unique") == 0;
-
-                    var cname = dr2.Get<String>("Column_name");
-                    var cs = new List<String>();
-                    if (di.Columns != null && di.Columns.Length > 0) cs.AddRange(di.Columns);
-                    cs.Add(cname);
-                    di.Columns = cs.ToArray();
-
-                    table.Indexes.Add(di);
-                }
-                #endregion
-
-                // 修正关系数据
-                table.Fix();
-
-                list.Add(table);
+            }
+            finally
+            {
+                ss.ShowSQL = old;
             }
 
             // 找到使用枚举作为布尔型的旧表
@@ -595,7 +628,7 @@ namespace XCode.DataAccessLayer
 
         public override String CreateDatabaseSQL(String dbname, String file) => base.CreateDatabaseSQL(dbname, file) + " DEFAULT CHARACTER SET utf8mb4";
 
-        public override String DropDatabaseSQL(String dbname) => $"Drop Database If Exists {FormatName(dbname)}";
+        public override String DropDatabaseSQL(String dbname) => $"Drop Database If Exists {Database.FormatName(dbname)}";
 
         public override String CreateTableSQL(IDataTable table)
         {
@@ -603,40 +636,23 @@ namespace XCode.DataAccessLayer
 
             //var sb = new StringBuilder(32 + fs.Count * 20);
             var sb = Pool.StringBuilder.Get();
-            var pks = new List<String>();
 
-            sb.AppendFormat("Create Table If Not Exists {0}(", FormatName(table.TableName));
+            sb.AppendFormat("Create Table If Not Exists {0}(", FormatName(table));
             for (var i = 0; i < fs.Count; i++)
             {
                 sb.AppendLine();
-                sb.Append("\t");
+                sb.Append('\t');
                 sb.Append(FieldClause(fs[i], true));
-                if (i < fs.Count - 1) sb.Append(",");
-
-                if (fs[i].PrimaryKey) pks.Add(FormatName(fs[i].ColumnName));
+                if (i < fs.Count - 1) sb.Append(',');
             }
-            // 如果有自增，则自增必须作为主键
-            foreach (var item in table.Columns)
-            {
-                if (item.Identity && !item.PrimaryKey)
-                {
-                    pks.Clear();
-                    pks.Add(FormatName(item.ColumnName));
-                    break;
-                }
-            }
-            if (pks.Count > 0)
-            {
-                sb.AppendLine(",");
-                sb.AppendFormat("\tPrimary Key ({0})", String.Join(",", pks.ToArray()));
-            }
+            if (table.PrimaryKeys.Length > 0) sb.AppendFormat(",\r\n\tPrimary Key ({0})", table.PrimaryKeys.Join(",", FormatName));
             sb.AppendLine();
-            sb.Append(")");
+            sb.Append(')');
 
             // 引擎和编码
             //sb.Append(" ENGINE=InnoDB");
             sb.Append(" DEFAULT CHARSET=utf8mb4");
-            sb.Append(";");
+            sb.Append(';');
 
             return sb.Put(true);
         }
@@ -645,10 +661,10 @@ namespace XCode.DataAccessLayer
         {
             if (String.IsNullOrEmpty(table.Description)) return null;
 
-            return $"Alter Table {FormatName(table.TableName)} Comment '{table.Description}'";
+            return $"Alter Table {FormatName(table)} Comment '{table.Description}'";
         }
 
-        public override String AlterColumnSQL(IDataColumn field, IDataColumn oldfield) => $"Alter Table {FormatName(field.Table.TableName)} Modify Column {FieldClause(field, false)}";
+        public override String AlterColumnSQL(IDataColumn field, IDataColumn oldfield) => $"Alter Table {FormatName(field.Table)} Modify Column {FieldClause(field, false)}";
 
         public override String AddColumnDescriptionSQL(IDataColumn field)
         {

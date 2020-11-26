@@ -36,8 +36,8 @@ namespace NewLife.Web
         #endregion
 
         #region 方法
-        static Regex _regA = new Regex("<a(?<其它1>[^>]*) href=?\"(?<链接>[^>\"]*)?\"(?<其它2>[^>]*)>(?<名称>[^<]*)</a>", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
-        static Regex _regTitle = new Regex("title=(\"?)(?<标题>[^ \']*?)\\1", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+        static readonly Regex _regA = new Regex("<a(?<其它1>[^>]*) href=?\"(?<链接>[^>\"]*)?\"(?<其它2>[^>]*)>(?<名称>[^<]*)</a>", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+        static readonly Regex _regTitle = new Regex("title=(\"?)(?<标题>[^ \']*?)\\1", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
 
         /// <summary>分析HTML中的链接</summary>
         /// <param name="html">Html文本</param>
@@ -110,7 +110,7 @@ namespace NewLife.Web
             if (ns.Length == 0) return list.ToArray();
 
             // 如果由很多段组成，可能是unix格式
-            var unix = ns[0].Split(" ").Length >= 6;
+            _ = ns[0].Split(" ").Length >= 6;
             var buri = new Uri(url);
             foreach (var item in ns)
             {

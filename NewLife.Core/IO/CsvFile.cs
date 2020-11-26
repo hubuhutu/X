@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using NewLife.Collections;
 
 namespace NewLife.IO
@@ -18,6 +19,7 @@ namespace NewLife.IO
         public Encoding Encoding { get; set; } = Encoding.UTF8;
 
         private readonly Stream _stream;
+        private readonly Boolean _leaveOpen;
 
         /// <summary>分隔符。默认逗号</summary>
         public Char Separator { get; set; } = ',';
@@ -28,31 +30,43 @@ namespace NewLife.IO
         /// <param name="stream"></param>
         public CsvFile(Stream stream) => _stream = stream;
 
+        /// <summary>数据流实例化</summary>
+        /// <param name="stream"></param>
+        /// <param name="leaveOpen">保留打开</param>
+        public CsvFile(Stream stream, Boolean leaveOpen)
+        {
+            _stream = stream;
+            _leaveOpen = leaveOpen;
+        }
+
         /// <summary>Csv文件实例化</summary>
         /// <param name="file"></param>
         /// <param name="write"></param>
         public CsvFile(String file, Boolean write = false)
         {
+            file = file.GetFullPath();
             if (write)
-                _stream = new FileStream(file, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
+                _stream = new FileStream(file.EnsureDirectory(true), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
             else
                 _stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         }
 
         /// <summary>销毁</summary>
         /// <param name="disposing"></param>
-        protected override void OnDispose(Boolean disposing)
+        protected override void Dispose(Boolean disposing)
         {
-            base.OnDispose(disposing);
+            base.Dispose(disposing);
 
-            _reader.TryDispose();
-
+            // 必须刷新写入器，否则可能丢失一截数据
             _writer?.Flush();
 
-            if (_stream is FileStream fs)
+            if (!_leaveOpen && _stream != null)
             {
+                _reader.TryDispose();
+
                 _writer.TryDispose();
-                fs.TryDispose();
+
+                _stream.Close();
             }
         }
         #endregion
@@ -147,13 +161,42 @@ namespace NewLife.IO
         {
             EnsureWriter();
 
+            var str = BuildLine(line);
+
+            _writer.WriteLine(str);
+        }
+
+#if !NET4
+        /// <summary>异步写入一行</summary>
+        /// <param name="line"></param>
+        public async Task WriteLineAsync(IEnumerable<Object> line)
+        {
+            EnsureWriter();
+
+            var str = BuildLine(line);
+
+            await _writer.WriteLineAsync(str);
+        }
+#endif
+
+        /// <summary>构建一行</summary>
+        /// <param name="line"></param>
+        /// <returns></returns>
+        protected virtual String BuildLine(IEnumerable<Object> line)
+        {
             var sb = Pool.StringBuilder.Get();
 
             foreach (var item in line)
             {
                 if (sb.Length > 0) sb.Append(Separator);
 
-                if (!(item is String str)) str = "{0}".F(item);
+                var str = item switch
+                {
+                    String str2 => str2,
+                    DateTime dt => dt.ToFullString(""),
+                    Boolean b => b ? "1" : "0",
+                    _ => item + "",
+                };
 
                 if (str.Contains("\""))
                     sb.AppendFormat("\"{0}\"", str.Replace("\"", "\"\""));
@@ -163,13 +206,17 @@ namespace NewLife.IO
                     sb.Append(str);
             }
 
-            _writer.WriteLine(sb.Put(true));
+            return sb.Put(true);
         }
 
         private StreamWriter _writer;
         private void EnsureWriter()
         {
+#if NET4
             if (_writer == null) _writer = new StreamWriter(_stream, Encoding);
+#else
+            if (_writer == null) _writer = new StreamWriter(_stream, Encoding, 1024, true);
+#endif
         }
         #endregion
     }

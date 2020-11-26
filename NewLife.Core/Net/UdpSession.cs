@@ -1,19 +1,21 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Tasks;
-using NewLife.Collections;
 using NewLife.Data;
 using NewLife.Log;
 using NewLife.Model;
-using NewLife.Threading;
+#if !NET4
+using TaskEx = System.Threading.Tasks.Task;
+#endif
 
 namespace NewLife.Net
 {
     /// <summary>Udp会话。仅用于服务端与某一固定远程地址通信</summary>
-    class UdpSession : DisposeBase, ISocketSession, ITransport
+    internal class UdpSession : DisposeBase, ISocketSession, ITransport
     {
         #region 属性
         /// <summary>会话编号</summary>
@@ -35,15 +37,12 @@ namespace NewLife.Net
         /// <summary>本地地址</summary>
         public NetUri Local
         {
-            get
-            {
-                return _Local ?? (_Local = Server?.Local);
-            }
-            set { Server.Local = _Local = value; }
+            get => _Local ??= Server?.Local;
+            set => Server.Local = _Local = value;
         }
 
         /// <summary>端口</summary>
-        public Int32 Port { get { return Local.Port; } set { Local.Port = value; } }
+        public Int32 Port { get => Local.Port; set => Local.Port = value; }
 
         /// <summary>远程地址</summary>
         public NetUri Remote { get; set; }
@@ -52,7 +51,7 @@ namespace NewLife.Net
         /// <summary>超时。默认3000ms</summary>
         public Int32 Timeout
         {
-            get { return _timeout; }
+            get => _timeout;
             set
             {
                 _timeout = value;
@@ -61,24 +60,22 @@ namespace NewLife.Net
             }
         }
 
-        /// <summary>管道</summary>
+        /// <summary>消息管道。收发消息都经过管道处理器，进行协议编码解码</summary>
+        /// <remarks>
+        /// 1，接收数据解码时，从前向后通过管道处理器；
+        /// 2，发送数据编码时，从后向前通过管道处理器；
+        /// </remarks>
         public IPipeline Pipeline { get; set; }
 
         /// <summary>Socket服务器。当前通讯所在的Socket服务器，其实是TcpServer/UdpServer</summary>
         ISocketServer ISocketSession.Server => Server;
 
         /// <summary>是否抛出异常，默认false不抛出。Send/Receive时可能发生异常，该设置决定是直接抛出异常还是通过<see cref="Error"/>事件</summary>
-        public Boolean ThrowException { get { return Server.ThrowException; } set { Server.ThrowException = value; } }
+        public Boolean ThrowException { get => Server.ThrowException; set => Server.ThrowException = value; }
 
         /// <summary>异步处理接收到的数据，默认true利于提升网络吞吐量。</summary>
         /// <remarks>异步处理有可能造成数据包乱序，特别是Tcp。false避免拷贝，提升处理速度</remarks>
-        public Boolean ProcessAsync { get { return Server.ProcessAsync; } set { Server.ProcessAsync = value; } }
-
-        /// <summary>发送数据包统计信息</summary>
-        public ICounter StatSend { get; set; }
-
-        /// <summary>接收数据包统计信息</summary>
-        public ICounter StatReceive { get; set; }
+        public Boolean ProcessAsync { get => Server.ProcessAsync; set => Server.ProcessAsync = value; }
 
         /// <summary>通信开始时间</summary>
         public DateTime StartTime { get; private set; }
@@ -86,23 +83,18 @@ namespace NewLife.Net
         /// <summary>最后一次通信时间，主要表示活跃时间，包括收发</summary>
         public DateTime LastTime { get; private set; }
 
-        /// <summary>缓冲区大小。默认8k</summary>
-        public Int32 BufferSize { get { return Server.BufferSize; } set { Server.BufferSize = value; } }
-
+        ///// <summary>缓冲区大小。默认8k</summary>
+        //public Int32 BufferSize { get => Server.BufferSize; set => Server.BufferSize = value; }
         #endregion
 
         #region 构造
         public UdpSession(UdpServer server, IPEndPoint remote)
         {
             Name = server.Name;
-            //Stream = new MemoryStream();
             StartTime = DateTime.Now;
 
             Server = server;
             Remote = new NetUri(NetType.Udp, remote);
-
-            StatSend = server.StatSend;
-            StatReceive = server.StatReceive;
 
             // 检查并开启广播
             server.Client.CheckBroadcast(remote.Address);
@@ -118,19 +110,17 @@ namespace NewLife.Net
             WriteLog("New {0}", Remote.EndPoint);
 
             // 管道
-            var pp = Pipeline;
-            pp?.Open(Server.CreateContext(this));
+            Pipeline?.Open(Server.CreateContext(this));
         }
 
-        protected override void OnDispose(Boolean disposing)
+        protected override void Dispose(Boolean disposing)
         {
-            base.OnDispose(disposing);
+            base.Dispose(disposing);
 
             WriteLog("Close {0}", Remote.EndPoint);
 
             // 管道
-            var pp = Pipeline;
-            pp?.Close(Server.CreateContext(this), disposing ? "Dispose" : "GC");
+            Pipeline?.Close(Server.CreateContext(this), disposing ? "Dispose" : "GC");
 
             // 释放对服务对象的引用，如果没有其它引用，服务对象将会被回收
             Server = null;
@@ -138,22 +128,20 @@ namespace NewLife.Net
         #endregion
 
         #region 发送
-        public Boolean Send(Packet pk)
+        public Int32 Send(Packet data)
         {
             if (Disposed) throw new ObjectDisposedException(GetType().Name);
 
-            return Server.OnSend(pk, Remote.EndPoint);
+            return Server.OnSend(data, Remote.EndPoint);
         }
 
-        /// <summary>发送消息</summary>
+        /// <summary>发送消息，不等待响应</summary>
         /// <param name="message"></param>
         /// <returns></returns>
-        public virtual Boolean SendMessage(Object message)
+        public virtual Int32 SendMessage(Object message)
         {
             var ctx = Server.CreateContext(this);
-            message = Pipeline.Write(ctx, message);
-
-            return ctx.FireWrite(message);
+            return (Int32)Pipeline.Write(ctx, message);
         }
 
         /// <summary>发送消息并等待响应</summary>
@@ -165,9 +153,8 @@ namespace NewLife.Net
             var source = new TaskCompletionSource<Object>();
             ctx["TaskSource"] = source;
 
-            message = Pipeline.Write(ctx, message);
-
-            if (!ctx.FireWrite(message)) return Task.FromResult((Object)null);
+            var rs = (Int32)Pipeline.Write(ctx, message);
+            if (rs < 0) return TaskEx.FromResult((Object)null);
 
             return source.Task;
         }
@@ -187,7 +174,7 @@ namespace NewLife.Net
             //return task.Result;
 
             var ep = Remote.EndPoint as EndPoint;
-            var buf = new Byte[BufferSize];
+            var buf = new Byte[Server.BufferSize];
             var size = Server.Client.ReceiveFrom(buf, ref ep);
 
             return new Packet(buf, 0, size);
@@ -197,7 +184,7 @@ namespace NewLife.Net
 
         internal void OnReceive(ReceivedEventArgs e)
         {
-            LastTime = TimerX.Now;
+            LastTime = DateTime.Now;
 
             if (e != null) Received?.Invoke(this, e);
         }
@@ -227,7 +214,7 @@ namespace NewLife.Net
         public override String ToString()
         {
             if (Remote != null && !Remote.EndPoint.IsAny())
-                return String.Format("{0}=>{1}", Local, Remote.EndPoint);
+                return $"{Local}=>{Remote.EndPoint}";
             else
                 return Local.ToString();
         }
@@ -240,13 +227,14 @@ namespace NewLife.Net
         #endregion
 
         #region 扩展接口
+        private readonly ConcurrentDictionary<String, Object> _Items = new ConcurrentDictionary<String, Object>();
         /// <summary>数据项</summary>
-        public IDictionary<String, Object> Items { get; } = new NullableDictionary<String, Object>();
+        public IDictionary<String, Object> Items => _Items;
 
         /// <summary>设置 或 获取 数据项</summary>
         /// <param name="key"></param>
         /// <returns></returns>
-        public Object this[String key] { get => Items[key]; set => Items[key] = value; }
+        public Object this[String key] { get => _Items.TryGetValue(key, out var obj) ? obj : null; set => _Items[key] = value; }
         #endregion
 
         #region 日志
@@ -268,11 +256,11 @@ namespace NewLife.Net
                 if (_LogPrefix == null)
                 {
                     var name = Server == null ? "" : Server.Name;
-                    _LogPrefix = "{0}[{1}].".F(name, ID);
+                    _LogPrefix = $"{name}[{ID}].";
                 }
                 return _LogPrefix;
             }
-            set { _LogPrefix = value; }
+            set => _LogPrefix = value;
         }
 
         /// <summary>输出日志</summary>

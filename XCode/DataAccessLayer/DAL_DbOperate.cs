@@ -1,15 +1,13 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
+using NewLife;
+using NewLife.Caching;
 using NewLife.Collections;
 using NewLife.Data;
-using NewLife.Reflection;
-using NewLife.Serialization;
 
 namespace XCode.DataAccessLayer
 {
@@ -25,6 +23,12 @@ namespace XCode.DataAccessLayer
         private static Int32 _ExecuteTimes;
         /// <summary>执行次数</summary>
         public static Int32 ExecuteTimes => _ExecuteTimes;
+
+        /// <summary>只读实例。读写分离时，读取操作分走</summary>
+        public DAL ReadOnly { get; set; }
+
+        /// <summary>读写分离策略。忽略时间区间和表名</summary>
+        public ReadWriteStrategy Strategy { get; set; } = new ReadWriteStrategy();
         #endregion
 
         #region 数据操作方法
@@ -38,7 +42,7 @@ namespace XCode.DataAccessLayer
             if (startRowIndex <= 0 && maximumRows <= 0) return builder;
 
             // 2016年7月2日 HUIYUE 取消分页SQL缓存，此部分缓存提升性能不多，但有可能会造成分页数据不准确，感觉得不偿失
-            return Db.PageSplit(builder, startRowIndex, maximumRows);
+            return Db.PageSplit(builder.Clone(), startRowIndex, maximumRows);
         }
 
         /// <summary>执行SQL查询，返回记录集</summary>
@@ -212,12 +216,12 @@ namespace XCode.DataAccessLayer
 
         #region 缓存
         /// <summary>缓存存储</summary>
-        public DictionaryCache<String, Object> Store { get; set; }
+        public ICache Store { get; set; }
 
         /// <summary>数据层缓存。默认10秒</summary>
         public Int32 Expire { get; set; }
 
-        private DictionaryCache<String, Object> GetCache()
+        private ICache GetCache()
         {
             var st = Store;
             if (st != null) return st;
@@ -236,42 +240,48 @@ namespace XCode.DataAccessLayer
                     var p = exp / 2;
                     if (p < 30) p = 30;
 
-                    st = Store = new DictionaryCache<String, Object> { Period = p, Expire = exp };
+                    st = Store = new MemoryCache { Period = p, Expire = exp };
                 }
             }
 
             return st;
         }
 
-        private TResult QueryByCache<T1, T2, T3, TResult>(T1 k1, T2 k2, T3 k3, Func<T1, T2, T3, TResult> callback, String prefix = null)
+        private TResult QueryByCache<T1, T2, T3, TResult>(T1 k1, T2 k2, T3 k3, Func<T1, T2, T3, TResult> callback, String action)
         {
+            // 读写分离
+            if (Strategy != null)
+            {
+                if (Strategy.Validate(this, k1 + "", action)) return ReadOnly.QueryByCache(k1, k2, k3, callback, action);
+            }
+
             CheckDatabase();
 
             // 读缓存
             var cache = GetCache();
+            var key = "";
             if (cache != null)
             {
                 var sb = Pool.StringBuilder.Get();
-                if (!prefix.IsNullOrEmpty())
+                if (!action.IsNullOrEmpty())
                 {
-                    sb.Append(prefix);
-                    sb.Append("#");
+                    sb.Append(action);
+                    sb.Append('#');
                 }
                 Append(sb, k1);
                 Append(sb, k2);
                 Append(sb, k3);
-                var key = sb.Put(true);
+                key = sb.Put(true);
 
-                return cache.GetItem(key, k =>
-                {
-                    Interlocked.Increment(ref _QueryTimes);
-                    return callback(k1, k2, k3);
-                }).ChangeType<TResult>();
+                if (cache.TryGetValue<TResult>(key, out var value)) return value;
             }
 
             Interlocked.Increment(ref _QueryTimes);
+            var rs = Invoke(k1, k2, k3, callback, action);
 
-            return callback(k1, k2, k3);
+            cache?.Set(key, rs, Expire);
+
+            return rs;
         }
 
         private TResult ExecuteByCache<T1, T2, T3, TResult>(T1 k1, T2 k2, T3 k3, Func<T1, T2, T3, TResult> callback)
@@ -280,14 +290,57 @@ namespace XCode.DataAccessLayer
 
             CheckDatabase();
 
-            var rs = callback(k1, k2, k3);
+            var rs = Invoke(k1, k2, k3, callback, "Execute");
 
-            var st = GetCache();
-            st?.Clear();
+            GetCache()?.Clear();
 
             Interlocked.Increment(ref _ExecuteTimes);
 
             return rs;
+        }
+
+        private TResult Invoke<T1, T2, T3, TResult>(T1 k1, T2 k2, T3 k3, Func<T1, T2, T3, TResult> callback, String action)
+        {
+            var tracer = Tracer ?? GlobalTracer;
+            var traceName = $"db:{ConnName}:{action}";
+
+            // 从sql解析表名，作为跟踪名一部分。正则避免from前后换行的情况
+            if (tracer != null)
+            {
+                var tables = GetTables(k1 + "");
+                if (tables.Length > 0) traceName += ":" + tables.Join("-");
+            }
+
+            // 使用k1参数作为tag，一般是sql
+            var span = tracer?.NewSpan(traceName, k1 + "");
+            try
+            {
+                return callback(k1, k2, k3);
+            }
+            catch (Exception ex)
+            {
+                span?.SetError(ex, null);
+                throw;
+            }
+            finally
+            {
+                span?.Dispose();
+            }
+        }
+
+        private static readonly Regex reg_table = new Regex("(?:\\s+from|insert\\s+into|update|\\s+join)\\s+[`'\"\\[]?([\\w]+)[`'\"\\[]?", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        /// <summary>从Sql语句中截取表名</summary>
+        /// <param name="sql"></param>
+        /// <returns></returns>
+        public static String[] GetTables(String sql)
+        {
+            var list = new List<String>();
+            var ms = reg_table.Matches(sql);
+            foreach (Match item in ms)
+            {
+                list.Add(item.Groups[1].Value);
+            }
+            return list.ToArray();
         }
 
         private static void Append(StringBuilder sb, Object value)
@@ -299,9 +352,9 @@ namespace XCode.DataAccessLayer
                 sb.Append(builder);
                 foreach (var item in builder.Parameters)
                 {
-                    sb.Append("#");
+                    sb.Append('#');
                     sb.Append(item.ParameterName);
-                    sb.Append("#");
+                    sb.Append('#');
                     sb.Append(item.Value);
                 }
             }
@@ -309,9 +362,9 @@ namespace XCode.DataAccessLayer
             {
                 foreach (var item in ps)
                 {
-                    sb.Append("#");
+                    sb.Append('#');
                     sb.Append(item.ParameterName);
-                    sb.Append("#");
+                    sb.Append('#');
                     sb.Append(item.Value);
                 }
             }
@@ -319,15 +372,15 @@ namespace XCode.DataAccessLayer
             {
                 foreach (var item in dic)
                 {
-                    sb.Append("#");
+                    sb.Append('#');
                     sb.Append(item.Key);
-                    sb.Append("#");
+                    sb.Append('#');
                     sb.Append(item.Value);
                 }
             }
             else
             {
-                sb.Append("#");
+                sb.Append('#');
                 sb.Append(value);
             }
         }

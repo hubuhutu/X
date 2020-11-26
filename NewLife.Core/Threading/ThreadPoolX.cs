@@ -14,7 +14,7 @@ namespace NewLife.Threading
         static ThreadPoolX()
         {
             // 在这个同步异步大量混合使用的时代，需要更多的初始线程来屏蔽各种对TPL的不合理使用
-            ThreadPool.GetMinThreads(out var wt, out var pt);
+            ThreadPool.GetMinThreads(out var wt, out _);
             if (wt < 32) ThreadPool.SetMinThreads(32, 32);
         }
 
@@ -221,17 +221,19 @@ namespace NewLife.Threading
 
         /// <summary>销毁</summary>
         /// <param name="disposing"></param>
-        protected override void OnDispose(Boolean disposing)
+        protected override void Dispose(Boolean disposing)
         {
-            base.OnDispose(disposing);
+            base.Dispose(disposing);
 
             try
             {
                 Active = false;
                 waitForTimer?.Set();
 
+#if !NET50
                 var th = Thread;
                 if (th != null && th.IsAlive) th.Abort();
+#endif
             }
             catch { }
         }
@@ -253,7 +255,7 @@ namespace NewLife.Threading
         }
 
         private Action _callback;
-        private AutoResetEvent waitForTimer;
+        private readonly AutoResetEvent waitForTimer;
         private Int32 _state;
         private void Work()
         {

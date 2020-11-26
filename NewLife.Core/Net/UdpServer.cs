@@ -25,14 +25,11 @@ namespace NewLife.Net
         /// </remarks>
         public Int32 SessionTimeout { get; set; }
 
-        /// <summary>最后一次同步接收数据得到的远程地址</summary>
-        public IPEndPoint LastRemote { get; set; }
+        ///// <summary>最后一次同步接收数据得到的远程地址</summary>
+        //public IPEndPoint LastRemote { get; set; }
 
         /// <summary>是否接收来自自己广播的环回数据。默认false</summary>
         public Boolean Loopback { get; set; }
-
-        /// <summary>会话统计</summary>
-        public ICounter StatSession { get; set; }
         #endregion
 
         #region 构造
@@ -43,7 +40,6 @@ namespace NewLife.Net
             Remote.Type = NetType.Udp;
             _Sessions = new SessionCollection(this);
 
-            //StatSession = new PerfCounter();
             SessionTimeout = Setting.Current.SessionTimeout;
 
             // 处理UDP最大并发接收
@@ -71,8 +67,6 @@ namespace NewLife.Net
                 {
                     Local.Address = Local.Address.GetRightAny(Remote.Address.AddressFamily);
                 }
-
-                if (StatSession == null) StatSession = new PerfCounter();
 
                 Client = sock = NetHelper.CreateUdp(Local.EndPoint.Address.IsIPv4());
                 sock.Bind(Local.EndPoint);
@@ -119,16 +113,15 @@ namespace NewLife.Net
         /// </remarks>
         /// <param name="pk">数据包</param>
         /// <returns>是否成功</returns>
-        protected override Boolean OnSend(Packet pk) => OnSend(pk, Remote.EndPoint);
+        protected override Int32 OnSend(Packet pk) => OnSend(pk, Remote.EndPoint);
 
-        internal Boolean OnSend(Packet pk, IPEndPoint remote)
+        internal Int32 OnSend(Packet pk, IPEndPoint remote)
         {
             var count = pk.Total;
 
-            StatSend?.Increment(count, 0);
-
             try
             {
+                var rs = 0;
                 var sock = Client;
                 lock (sock)
                 {
@@ -137,9 +130,9 @@ namespace NewLife.Net
                         if (Log.Enable && LogSend) WriteLog("Send [{0}]: {1}", count, pk.ToHex());
 
                         if (pk.Next == null)
-                            sock.Send(pk.Data, pk.Offset, count, SocketFlags.None);
+                            rs = sock.Send(pk.Data, pk.Offset, count, SocketFlags.None);
                         else
-                            sock.Send(pk.ToArray(), 0, count, SocketFlags.None);
+                            rs = sock.Send(pk.ToSegments(), SocketFlags.None);
                     }
                     else
                     {
@@ -147,13 +140,13 @@ namespace NewLife.Net
                         if (Log.Enable && LogSend) WriteLog("Send {2} [{0}]: {1}", count, pk.ToHex(), remote);
 
                         if (pk.Next == null)
-                            sock.SendTo(pk.Data, pk.Offset, count, SocketFlags.None, remote);
+                            rs = sock.SendTo(pk.Data, pk.Offset, count, SocketFlags.None, remote);
                         else
-                            sock.SendTo(pk.ToArray(), 0, count, SocketFlags.None, remote);
+                            rs = sock.SendTo(pk.ToArray(), 0, count, SocketFlags.None, remote);
                     }
                 }
 
-                return true;
+                return rs;
             }
             catch (Exception ex)
             {
@@ -166,7 +159,7 @@ namespace NewLife.Net
 
                     if (ThrowException) throw;
                 }
-                return false;
+                return -1;
             }
         }
 
@@ -177,6 +170,16 @@ namespace NewLife.Net
         #endregion
 
         #region 接收
+        internal override Boolean OnReceiveAsync(SocketAsyncEventArgs se)
+        {
+            if (!Active || Client == null) return false;
+
+            // 每次接收以后，这个会被设置为远程地址，这里重置一下，以防万一
+            se.RemoteEndPoint = new IPEndPoint(IPAddress.Any.GetRightAny(Local.EndPoint.AddressFamily), 0);
+
+            return Client.ReceiveFromAsync(se);
+        }
+
         /// <summary>预处理</summary>
         /// <param name="pk">数据包</param>
         /// <param name="remote">远程地址</param>
@@ -199,7 +202,7 @@ namespace NewLife.Net
                 }
             }
 
-            LastRemote = remote;
+            //LastRemote = remote;
 
             // 为该连接单独创建一个会话，方便直接通信
             return CreateSession(remote);
@@ -210,7 +213,6 @@ namespace NewLife.Net
         protected override Boolean OnReceive(ReceivedEventArgs e)
         {
             var pk = e.Packet;
-            StatReceive?.Increment(pk.Count, 0);
 
             var remote = e.Remote;
 
@@ -258,16 +260,6 @@ namespace NewLife.Net
             // 无论如何，Udp都不关闭自己
             return false;
         }
-
-        internal override Boolean OnReceiveAsync(SocketAsyncEventArgs se)
-        {
-            if (!Active || Client == null) return false;
-
-            // 每次接收以后，这个会被设置为远程地址，这里重置一下，以防万一
-            se.RemoteEndPoint = new IPEndPoint(IPAddress.Any.GetRightAny(Local.EndPoint.AddressFamily), 0);
-
-            return Client.ReceiveFromAsync(se);
-        }
         #endregion
 
         #region 会话
@@ -277,6 +269,8 @@ namespace NewLife.Net
         private readonly SessionCollection _Sessions;
         /// <summary>会话集合。用地址端口作为标识，业务应用自己维持地址端口与业务主键的对应关系。</summary>
         public IDictionary<String, ISocketSession> Sessions => _Sessions;
+
+        private readonly IDictionary<Int32, ISocketSession> _broadcasts = new Dictionary<Int32, ISocketSession>();
 
         Int32 g_ID = 0;
         /// <summary>创建会话</summary>
@@ -301,35 +295,44 @@ namespace NewLife.Net
 
             // 需要查找已有会话，已有会话不存在时才创建新会话
             var session = sessions.Get(remoteEP + "");
-            if (session != null) return session;
+            // 是否匹配广播端口
+            var port = remoteEP.Port;
+            if (session != null || _broadcasts.TryGetValue(port, out session)) return session;
 
             // 相同远程地址可能同时发来多个数据包，而底层采取多线程方式同时调度，导致创建多个会话
             lock (sessions)
             {
                 // 需要查找已有会话，已有会话不存在时才创建新会话
                 session = sessions.Get(remoteEP + "");
-                if (session != null) return session;
+                if (session != null || _broadcasts.TryGetValue(port, out session)) return session;
 
                 var us = new UdpSession(this, remoteEP)
                 {
                     Log = Log,
                     LogSend = LogSend,
                     LogReceive = LogReceive,
-                    // UDP不好分会话统计
-                    //us.StatSend.Parent = StatSend;
-                    //us.StatReceive.Parent = StatReceive;
-                    //Packet = SessionPacket?.Create()
                 };
 
                 session = us;
                 if (sessions.Add(session))
                 {
+                    // 广播地址，接受任何地址响应数据
+                    if (Equals(remoteEP.Address, IPAddress.Broadcast))
+                    {
+                        _broadcasts[port] = session;
+                        session.OnDisposed += (s, e) =>
+                        {
+                            lock (_broadcasts)
+                            {
+                                _broadcasts.Remove((s as UdpSession).Remote.Port);
+                            }
+                        };
+                    }
+
                     //us.ID = g_ID++;
                     // 会话改为原子操作，避免多线程冲突
                     us.ID = Interlocked.Increment(ref g_ID);
                     us.Start();
-
-                    StatSession?.Increment(1, 0);
 
                     // 触发新会话事件
                     NewSession?.Invoke(this, new SessionEventArgs { Session = session });
@@ -367,7 +370,7 @@ namespace NewLife.Net
         {
             var ss = Sessions;
             if (ss != null && ss.Count > 0)
-                return String.Format("{0} [{1}]", Local, ss.Count);
+                return $"{Local} [{ss.Count}]";
             else
                 return Local.ToString();
         }

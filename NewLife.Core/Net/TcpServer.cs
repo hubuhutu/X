@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using NewLife.Log;
@@ -11,7 +13,7 @@ namespace NewLife.Net
 {
     /// <summary>TCP服务器</summary>
     /// <remarks>
-    /// 核心工作：启动服务<see cref="Start"/>时，监听端口，并启用多个（逻辑处理器数的10倍）异步接受操作<see cref="AcceptAsync"/>。
+    /// 核心工作：启动服务<see cref="Start"/>时，监听端口，并启用多个（逻辑处理器数的10倍）异步接受操作<see cref="StartAccept"/>。
     /// 
     /// 服务器完全处于异步工作状态，任何操作都不可能被阻塞。
     /// 
@@ -51,20 +53,25 @@ namespace NewLife.Net
         /// <summary>最大并行接收连接数。默认CPU*1.6</summary>
         public Int32 MaxAsync { get; set; }
 
+        /// <summary>不延迟直接发送。Tcp为了合并小包而设计，客户端默认false，服务端默认true</summary>
+        public Boolean NoDelay { get; set; } = true;
+
         /// <summary>启用Http，数据处理时截去请求响应头，默认false</summary>
         public Boolean EnableHttp { get; set; }
 
-        /// <summary>管道</summary>
+        /// <summary>消息管道。收发消息都经过管道处理器，进行协议编码解码</summary>
+        /// <remarks>
+        /// 1，接收数据解码时，从前向后通过管道处理器；
+        /// 2，发送数据编码时，从后向前通过管道处理器；
+        /// </remarks>
         public IPipeline Pipeline { get; set; }
 
-        /// <summary>会话统计</summary>
-        public ICounter StatSession { get; set; }
+        /// <summary>SSL协议。默认None，服务端Default，客户端不启用</summary>
+        public SslProtocols SslProtocol { get; set; } = SslProtocols.None;
 
-        /// <summary>发送统计</summary>
-        public ICounter StatSend { get; set; }
-
-        /// <summary>接收统计</summary>
-        public ICounter StatReceive { get; set; }
+        /// <summary>SSL证书。服务端使用</summary>
+        /// <remarks>var cert = new X509Certificate2("file", "pass");</remarks>
+        public X509Certificate Certificate { get; set; }
         #endregion
 
         #region 构造
@@ -87,9 +94,9 @@ namespace NewLife.Net
 
         /// <summary>已重载。释放会话集合等资源</summary>
         /// <param name="disposing"></param>
-        protected override void OnDispose(Boolean disposing)
+        protected override void Dispose(Boolean disposing)
         {
-            base.OnDispose(disposing);
+            base.Dispose(disposing);
 
             if (Active) Stop(GetType().Name + (disposing ? "Dispose" : "GC"));
         }
@@ -103,11 +110,6 @@ namespace NewLife.Net
 
             if (Active || Disposed) return;
 
-            // 统计
-            if (StatSession == null) StatSession = new PerfCounter();
-            if (StatSend == null) StatSend = new PerfCounter();
-            if (StatReceive == null) StatReceive = new PerfCounter();
-
             var sock = Client;
 
             // 开始监听
@@ -120,7 +122,8 @@ namespace NewLife.Net
             // 在我（大石头）的开发机器上，实际上这里的最大值只能是200，大于200跟200一个样
             //Server.Start();
             sock.Bind(Local.EndPoint);
-            sock.Listen(Int32.MaxValue);
+            //sock.Listen(Int32.MaxValue);
+            sock.Listen(65535);
 
             if (Runtime.Windows)
             {
@@ -135,7 +138,7 @@ namespace NewLife.Net
                 var se = new SocketAsyncEventArgs();
                 se.Completed += (s, e) => ProcessAccept(e);
 
-                AcceptAsync(se, false);
+                StartAccept(se, false);
             }
         }
 
@@ -165,7 +168,7 @@ namespace NewLife.Net
         /// <param name="se"></param>
         /// <param name="io">是否IO线程</param>
         /// <returns>开启异步是否成功</returns>
-        Boolean AcceptAsync(SocketAsyncEventArgs se, Boolean io)
+        Boolean StartAccept(SocketAsyncEventArgs se, Boolean io)
         {
             if (!Active || Client == null)
             {
@@ -176,7 +179,7 @@ namespace NewLife.Net
             var rs = false;
             try
             {
-                //_Async = Server.BeginAcceptTcpClient(OnAccept, null);
+                se.AcceptSocket = null;
                 rs = Client.AcceptAsync(se);
             }
             catch (Exception ex)
@@ -231,14 +234,10 @@ namespace NewLife.Net
                 {
                     if (!ex.IsDisposed()) OnError("EndAccept", ex);
                 }
-                finally
-                {
-                    se.AcceptSocket = null;
-                }
             }
 
             // 开始新的征程
-            AcceptAsync(se, true);
+            StartAccept(se, true);
         }
 
         Int32 g_ID = 0;
@@ -257,18 +256,18 @@ namespace NewLife.Net
                 session.ID = Interlocked.Increment(ref g_ID);
                 session.WriteLog("New {0}", session.Remote.EndPoint);
 
-                StatSession?.Increment(1, 0);
-
                 NewSession?.Invoke(this, new SessionEventArgs { Session = session });
 
                 // 自动开始异步接收处理
+                session.SslProtocol = SslProtocol;
+                session.Certificate = Certificate;
                 session.Start();
             }
         }
         #endregion
 
         #region 会话
-        private SessionCollection _Sessions;
+        private readonly SessionCollection _Sessions;
         /// <summary>会话集合。用地址端口作为标识，业务应用自己维持地址端口与业务主键的对应关系。</summary>
         public IDictionary<String, ISocketSession> Sessions => _Sessions;
 
@@ -282,18 +281,16 @@ namespace NewLife.Net
             {
                 // 服务端不支持掉线重连
                 AutoReconnect = 0,
-                NoDelay = true,
+                NoDelay = NoDelay,
                 Log = Log,
                 LogSend = LogSend,
                 LogReceive = LogReceive,
-                StatSend = StatSend,
-                StatReceive = StatReceive,
                 ProcessAsync = ProcessAsync,
                 Pipeline = Pipeline
             };
 
             // 为了降低延迟，服务端不要合并小包
-            client.NoDelay = true;
+            client.NoDelay = NoDelay;
 
             return session;
         }
@@ -337,7 +334,7 @@ namespace NewLife.Net
                 if (_LogPrefix == null)
                 {
                     var name = Name == null ? "" : Name.TrimEnd("Server", "Session", "Client");
-                    _LogPrefix = "{0}.".F(name);
+                    _LogPrefix = $"{name}.";
                 }
                 return _LogPrefix;
             }
@@ -370,7 +367,7 @@ namespace NewLife.Net
             var ss = Sessions;
             var count = ss != null ? ss.Count : 0;
             if (count > 0)
-                return String.Format("{0} [{1}]", Local, count);
+                return $"{Local} [{count}]";
             else
                 return Local.ToString();
         }

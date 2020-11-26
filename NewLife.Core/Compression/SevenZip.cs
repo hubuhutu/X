@@ -11,7 +11,7 @@ namespace NewLife.Compression
     public class SevenZip
     {
         #region  基础
-        private static String _7z = null;
+        private static readonly String _7z = null;
 
         static SevenZip()
         {
@@ -29,17 +29,19 @@ namespace NewLife.Compression
             #endregion
 
             #region 注册表
-            //if (p.IsNullOrEmpty())
-            //{
-            //    var reg = Registry.LocalMachine.OpenSubKey("Software\\7-Zip");
-            //    if (reg == null) reg = Registry.LocalMachine.OpenSubKey("Software\\Wow6432Node\\7-Zip");
-            //    if (reg != null)
-            //    {
-            //        var d = reg.GetValue("Path") + "";
-            //        var f = d.CombinePath("7z.exe");
-            //        if (File.Exists(f)) p = f;
-            //    }
-            //}
+#if __WIN__
+            if (p.IsNullOrEmpty())
+            {
+                var reg = Registry.LocalMachine.OpenSubKey("Software\\7-Zip");
+                if (reg == null) reg = Registry.LocalMachine.OpenSubKey("Software\\Wow6432Node\\7-Zip");
+                if (reg != null)
+                {
+                    var d = reg.GetValue("Path") + "";
+                    var f = d.CombinePath("7z.exe");
+                    if (File.Exists(f)) p = f;
+                }
+            }
+#endif
             #endregion
 
             #region X组件缓存
@@ -57,7 +59,7 @@ namespace NewLife.Compression
                 XTrace.WriteLine("准备下载7z扩展包");
 
                 var url = Setting.Current.PluginServer;
-                var client = new WebClientX(true, true)
+                var client = new WebClientX()
                 {
                     Log = XTrace.Log
                 };
@@ -94,7 +96,7 @@ namespace NewLife.Compression
         {
             if (Directory.Exists(path)) path = path.GetFullPath().EnsureEnd("\\") + "*";
 
-            return Run("a \"{0}\" \"{1}\" -mx9 -ssw".F(destFile, path));
+            return Run($"a \"{destFile}\" \"{path}\" -mx9 -ssw");
         }
 
         /// <summary>解压缩文件</summary>
@@ -106,7 +108,7 @@ namespace NewLife.Compression
         {
             destDir.EnsureDirectory(false);
 
-            var args = "x \"{0}\" -o\"{1}\" -y -r".F(file, destDir);
+            var args = $"x \"{file}\" -o\"{destDir}\" -y -r";
             if (overwrite)
                 args += " -aoa";
             else

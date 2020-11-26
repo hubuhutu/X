@@ -1,8 +1,7 @@
 ﻿using System;
 using System.Linq;
-using System.Text;
+using NewLife;
 using NewLife.Collections;
-using XCode.Model;
 
 namespace XCode.DataAccessLayer
 {
@@ -102,12 +101,12 @@ namespace XCode.DataAccessLayer
 
             if (di.Table != null)
             {
-                sb.Append("_");
+                sb.Append('_');
                 sb.Append(di.Table.TableName);
             }
             for (var i = 0; i < di.Columns.Length; i++)
             {
-                sb.Append("_");
+                sb.Append('_');
                 sb.Append(di.Columns[i]);
             }
             return sb.Put(true);
@@ -276,7 +275,7 @@ namespace XCode.DataAccessLayer
 
         #region 静态实例
         /// <summary>当前名称解析器</summary>
-        public static IModelResolver Current { get { return XCodeService.Container.ResolveInstance<IModelResolver>(); } }
+        public static IModelResolver Current { get; set; } = new ModelResolver();
         #endregion
     }
 }

@@ -12,7 +12,7 @@ namespace NewLife.Net
     class SessionCollection : DisposeBase, IDictionary<String, ISocketSession>
     {
         #region 属性
-        ConcurrentDictionary<String, ISocketSession> _dic = new ConcurrentDictionary<String, ISocketSession>();
+        readonly ConcurrentDictionary<String, ISocketSession> _dic = new ConcurrentDictionary<String, ISocketSession>();
 
         /// <summary>服务端</summary>
         public ISocketServer Server { get; private set; }
@@ -21,7 +21,7 @@ namespace NewLife.Net
         public Int32 ClearPeriod { get; set; } = 10;
 
         /// <summary>清理会话计时器</summary>
-        private TimerX clearTimer;
+        private readonly TimerX clearTimer;
         #endregion
 
         #region 构造
@@ -37,9 +37,9 @@ namespace NewLife.Net
             };
         }
 
-        protected override void OnDispose(Boolean disposing)
+        protected override void Dispose(Boolean disposing)
         {
-            base.OnDispose(disposing);
+            base.Dispose(disposing);
 
             clearTimer.TryDispose();
 
@@ -54,10 +54,11 @@ namespace NewLife.Net
         public Boolean Add(ISocketSession session)
         {
             var key = session.Remote.EndPoint + "";
-            if (_dic.ContainsKey(key)) return false;
+            //if (_dic.ContainsKey(key)) return false;
+
+            if (!_dic.TryAdd(key, session)) return false;
 
             session.OnDisposed += (s, e) => { _dic.Remove((s as ISocketSession).Remote.EndPoint + ""); };
-            _dic.TryAdd(key, session);
 
             return true;
         }
@@ -93,7 +94,7 @@ namespace NewLife.Net
             var keys = new List<String>();
             var values = new List<ISocketSession>();
             // 估算完成时间，执行过长时提示
-            using (var tc = new TimeCost("{0}.RemoveNotAlive".F(GetType().Name), 100))
+            using (var tc = new TimeCost($"{GetType().Name}.RemoveNotAlive", 100))
             {
                 tc.Log = Server.Log;
 
@@ -138,7 +139,7 @@ namespace NewLife.Net
 
         public Boolean IsReadOnly => (_dic as IDictionary<Int32, ISocketSession>).IsReadOnly;
 
-        public IEnumerator<ISocketSession> GetEnumerator() => _dic.Values.GetEnumerator() as IEnumerator<ISocketSession>;
+        public IEnumerator<ISocketSession> GetEnumerator() => _dic.Values.GetEnumerator();
 
         IEnumerator IEnumerable.GetEnumerator() => _dic.GetEnumerator();
         #endregion

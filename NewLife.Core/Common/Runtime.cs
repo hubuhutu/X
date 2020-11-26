@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace NewLife
@@ -15,18 +16,28 @@ namespace NewLife
             {
                 if (_IsConsole != null) return _IsConsole.Value;
 
+#if __CORE__
+                // netcore 默认都是控制台，除非主动设置
+                _IsConsole = true;
+#else
+
                 try
                 {
-                    var flag = Console.CursorVisible;
-                    _IsConsole = true;
+                    var flag = Console.ForegroundColor;
+                    if (Process.GetCurrentProcess().MainWindowHandle != IntPtr.Zero)
+                        _IsConsole = false;
+                    else
+                        _IsConsole = true;
                 }
                 catch
                 {
                     _IsConsole = false;
                 }
+#endif
 
                 return _IsConsole.Value;
             }
+            set { _IsConsole = value; }
         }
         #endregion
 
@@ -54,10 +65,10 @@ namespace NewLife
         public static Boolean Windows { get; } = Environment.OSVersion.Platform <= PlatformID.WinCE;
 
         /// <summary>是否Linux环境</summary>
-        public static Boolean Linux => false;
+        public static Boolean Linux { get; } = Environment.OSVersion.Platform == PlatformID.Unix;
 
         /// <summary>是否OSX环境</summary>
-        public static Boolean OSX => false;
+        public static Boolean OSX { get; } = Environment.OSVersion.Platform == PlatformID.MacOSX;
 #endif
         #endregion
     }

@@ -1,9 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using NewLife;
 using NewLife.Data;
 using NewLife.Reflection;
 using NewLife.Remoting;
@@ -26,7 +24,7 @@ namespace XCode.Service
         /// <param name="cookie"></param>
         /// <returns></returns>
         [Api(nameof(Login))]
-        public LoginInfo Login(String db, String user, String pass, String cookie)
+        public virtual LoginInfo Login(String db, String user, String pass, String cookie)
         {
             var dal = DAL.Create(db);
             Dal = dal;
@@ -46,9 +44,7 @@ namespace XCode.Service
         {
             if (!Decode(pk, out var sql, out var ps)) return null;
 
-            var dal = Dal;
-
-            var rs = dal.Query(sql, ps);
+            var rs = Dal.Query(sql, ps);
 
             return rs?.ToPacket();
         }
@@ -75,7 +71,7 @@ namespace XCode.Service
             var dal = Dal;
             var dps = ps == null ? null : dal.Db.CreateParameters(ps);
 
-            var rs = 0L;
+            Int64 rs;
             if (sql.StartsWithIgnoreCase("@Insert"))
                 rs = dal.InsertAndGetIdentity(sql.Substring(1), CommandType.Text, dps);
             else
@@ -107,7 +103,7 @@ namespace XCode.Service
                     {
                         var name = bn.Read<String>();
                         var tc = (TypeCode)bn.Read<Byte>();
-                        var type = tc.ToString().GetTypeEx(false);
+                        var type = Type.GetType("System." + tc);
                         var value = bn.Read(type);
 
                         dic[name] = value;

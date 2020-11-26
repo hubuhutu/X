@@ -17,6 +17,9 @@ namespace XCode
         /// <summary>表名</summary>
         String TableName { get; }
 
+        /// <summary>数据表</summary>
+        IDataTable Table { get; }
+
         /// <summary>用于标识会话的键值</summary>
         String Key { get; }
 
@@ -117,6 +120,9 @@ namespace XCode
         /// <summary>回滚事务，忽略异常</summary>
         /// <returns>剩下的事务计数</returns>
         Int32 Rollback();
+
+        /// <summary>创建事务</summary>
+        EntityTransaction CreateTrans();
         #endregion
 
         #region 参数化
@@ -124,10 +130,10 @@ namespace XCode
         ///// <returns></returns>
         //IDataParameter CreateParameter();
 
-        /// <summary>格式化参数名</summary>
-        /// <param name="name">名称</param>
-        /// <returns></returns>
-        String FormatParameterName(String name);
+        ///// <summary>格式化参数名</summary>
+        ///// <param name="name">名称</param>
+        ///// <returns></returns>
+        //String FormatParameterName(String name);
         #endregion
 
         #region 实体操作

@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 using NewLife.Collections;
+using XCode.DataAccessLayer;
 
 namespace XCode
 {
@@ -32,7 +33,7 @@ namespace XCode
         public Operator Operator { get; set; }
 
         /// <summary>是否为空</summary>
-        public override Boolean IsEmpty => Left == null && Right == null;
+        public override Boolean IsEmpty => (Left == null || Left.IsEmpty) && (Right == null || Right.IsEmpty);
         #endregion
 
         #region 构造
@@ -53,10 +54,11 @@ namespace XCode
 
         #region 方法
         /// <summary>输出条件表达式的字符串表示，遍历表达式集合并拼接起来</summary>
+        /// <param name="db">数据库</param>
         /// <param name="builder"></param>
         /// <param name="ps">参数字典</param>
         /// <returns></returns>
-        public override void GetString(StringBuilder builder, IDictionary<String, Object> ps)
+        public override void GetString(IDatabase db, StringBuilder builder, IDictionary<String, Object> ps)
         {
             if (IsEmpty) return;
 
@@ -65,11 +67,11 @@ namespace XCode
             var len = builder.Length;
 
             // 左侧表达式
-            GetString(builder, ps, Left);
+            GetString(db, builder, ps, Left);
 
             // 右侧表达式
             var sb = Pool.StringBuilder.Get();
-            GetString(sb, ps, Right);
+            GetString(db, sb, ps, Right);
 
             // 中间运算符
             if (builder.Length > len && sb.Length > 0)
@@ -78,7 +80,7 @@ namespace XCode
                 {
                     case Operator.And: builder.Append(" And "); break;
                     case Operator.Or: builder.Append(" Or "); break;
-                    case Operator.Space: builder.Append(" "); break;
+                    case Operator.Space: builder.Append(' '); break;
                     default: break;
                 }
             }
@@ -86,23 +88,23 @@ namespace XCode
             builder.Append(sb.Put(true));
         }
 
-        private void GetString(StringBuilder builder, IDictionary<String, Object> ps, Expression exp)
+        private void GetString(IDatabase db, StringBuilder builder, IDictionary<String, Object> ps, Expression exp)
         {
             exp = Flatten(exp);
-            if (exp == null) return;
+            if (exp == null || exp.IsEmpty) return;
 
             // 递归构建，下级运算符优先级较低时加括号
             var bracket = false;
             if (exp is WhereExpression where)
             {
-                if (where.IsEmpty) return;
+                //if (where.IsEmpty) return;
 
                 if (where.Operator > Operator) bracket = true;
             }
 
-            if (bracket) builder.Append("(");
-            exp.GetString(builder, ps);
-            if (bracket) builder.Append(")");
+            if (bracket) builder.Append('(');
+            exp.GetString(db, builder, ps);
+            if (bracket) builder.Append(')');
         }
 
         /// <summary>拉平表达式，避免空子项</summary>
@@ -124,27 +126,6 @@ namespace XCode
 
             return exp;
         }
-        #endregion
-
-        #region 分组
-        ///// <summary>按照指定若干个字段分组。没有条件时使用分组请用FieldItem的GroupBy</summary>
-        ///// <param name="names"></param>
-        ///// <returns>返回条件语句加上分组语句</returns>
-        //public String GroupBy(params String[] names)
-        //{
-        //    var where = GetString(null);
-
-        //    var sb = new StringBuilder();
-        //    foreach (var item in names)
-        //    {
-        //        sb.Separate(",").Append(item);
-        //    }
-
-        //    if (where.IsNullOrWhiteSpace())
-        //        return "Group By {0}".F(sb.ToString());
-        //    else
-        //        return "{1} Group By {0}".F(sb.ToString(), where);
-        //}
         #endregion
     }
 }

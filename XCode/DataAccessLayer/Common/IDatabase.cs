@@ -22,6 +22,22 @@ namespace XCode.DataAccessLayer
         Full = 3
     }
 
+    /// <summary>名称格式化</summary>
+    public enum NameFormats
+    {
+        /// <summary>原样</summary>
+        Default = 0,
+
+        /// <summary>全大写</summary>
+        Upper,
+
+        /// <summary>全小写</summary>
+        Lower,
+
+        /// <summary>下划线</summary>
+        Underline,
+    }
+
     /// <summary>数据库接口</summary>
     /// <remarks>
     /// 抽象数据库的功能特点。
@@ -42,8 +58,8 @@ namespace XCode.DataAccessLayer
         /// <summary>链接字符串</summary>
         String ConnectionString { get; set; }
 
-        /// <summary>连接池</summary>
-        ConnectionPool Pool { get; }
+        ///// <summary>连接池</summary>
+        //ConnectionPool Pool { get; }
 
         /// <summary>拥有者</summary>
         String Owner { get; set; }
@@ -60,8 +76,14 @@ namespace XCode.DataAccessLayer
         /// <summary>参数化添删改查。默认关闭</summary>
         Boolean UseParameter { get; set; }
 
+        /// <summary>失败重试。执行命令超时后的重试次数，默认0不重试</summary>
+        Int32 RetryOnFailure { get; set; }
+
         /// <summary>反向工程。Off 关闭；ReadOnly 只读不执行；On 打开，新建；Full 完全，修改删除</summary>
         Migration Migration { get; set; }
+
+        /// <summary>表名、字段名大小写设置。（No 保持原样输出、Upper 全大写、Lower全小写）</summary>
+        NameFormats NameFormat { get; set; }
         #endregion
 
         #region 方法
@@ -72,6 +94,10 @@ namespace XCode.DataAccessLayer
         /// <summary>创建元数据对象</summary>
         /// <returns></returns>
         IMetaData CreateMetaData();
+
+        /// <summary>创建连接</summary>
+        /// <returns></returns>
+        DbConnection OpenConnection();
 
         /// <summary>是否支持该提供者所描述的数据库</summary>
         /// <param name="providerName">提供者</param>
@@ -121,15 +147,20 @@ namespace XCode.DataAccessLayer
         String FormatName(String name);
 
         /// <summary>格式化表名，考虑表前缀和Owner</summary>
-        /// <param name="tableName">名称</param>
+        /// <param name="table">表</param>
         /// <returns></returns>
-        String FormatTableName(String tableName);
+        String FormatName(IDataTable table);
+
+        /// <summary>格式化字段名，考虑大小写</summary>
+        /// <param name="column">字段</param>
+        /// <returns></returns>
+        String FormatName(IDataColumn column);
 
         /// <summary>格式化数据为SQL数据</summary>
-        /// <param name="field">字段</param>
+        /// <param name="column">字段</param>
         /// <param name="value">数值</param>
         /// <returns></returns>
-        String FormatValue(IDataColumn field, Object value);
+        String FormatValue(IDataColumn column, Object value);
 
         ///// <summary>格式化标识列，返回插入数据时所用的表达式，如果字段本身支持自增，则返回空</summary>
         ///// <param name="field">字段</param>
@@ -153,17 +184,29 @@ namespace XCode.DataAccessLayer
         /// <param name="value">值</param>
         /// <param name="field">字段</param>
         /// <returns></returns>
-        IDataParameter CreateParameter(String name, Object value, IDataColumn field = null);
+        IDataParameter CreateParameter(String name, Object value, IDataColumn field);
+
+        /// <summary>创建参数</summary>
+        /// <param name="name">名称</param>
+        /// <param name="value">值</param>
+        /// <param name="type">类型</param>
+        /// <returns></returns>
+        IDataParameter CreateParameter(String name, Object value, Type type = null);
 
         /// <summary>创建参数数组</summary>
         /// <param name="ps"></param>
         /// <returns></returns>
         IDataParameter[] CreateParameters(IDictionary<String, Object> ps);
 
+        /// <summary>根据对象成员创建参数数组</summary>
+        /// <param name="model"></param>
+        /// <returns></returns>
+        IDataParameter[] CreateParameters(Object model);
+
         /// <summary>获取 或 设置 自动关闭。每次使用完数据库连接后，是否自动关闭连接，高频操作时设为false可提升性能。默认true</summary>
         Boolean AutoClose { get; set; }
 
-        /// <summary>本连接数据只读。需求不够强劲，暂不支持在连接字符串中设置</summary>
+        /// <summary>本连接数据只读</summary>
         Boolean Readonly { get; set; }
 
         /// <summary>数据层缓存有效期。单位秒</summary>

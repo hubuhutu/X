@@ -25,7 +25,6 @@ namespace NewLife.Web
             lock (typeName)
             {
                 var set = Setting.Current;
-                var plug = set.GetPluginPath();
 
                 var file = "";
                 if (!dll.IsNullOrEmpty())
@@ -33,7 +32,8 @@ namespace NewLife.Web
                     // 先检查当前目录，再检查插件目录
                     file = dll.GetFullPath();
                     if (!File.Exists(file) && Runtime.IsWeb) file = "Bin".GetFullPath().CombinePath(dll);
-                    if (!File.Exists(file)) file = plug.CombinePath(dll);
+                    if (!File.Exists(file)) file = set.PluginPath.GetFullPath().CombinePath(dll);
+                    if (!File.Exists(file)) file = set.PluginPath.GetBasePath().CombinePath(dll);
                 }
 
                 if (urls.IsNullOrEmpty()) urls = set.PluginServer;
@@ -43,7 +43,7 @@ namespace NewLife.Web
                 {
                     XTrace.WriteLine("{0}不存在或平台版本不正确，准备联网获取 {1}", disname ?? dll, urls);
 
-                    var client = new WebClientX(true, true)
+                    var client = new WebClientX()
                     {
                         Log = XTrace.Log
                     };

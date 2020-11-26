@@ -6,7 +6,9 @@ using System.Data.Common;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using NewLife;
 using NewLife.Collections;
+using NewLife.Data;
 using NewLife.Reflection;
 using XCode.Common;
 
@@ -39,12 +41,12 @@ namespace XCode.DataAccessLayer
 
         protected override void OnSetConnectionString(ConnectionStringBuilder builder)
         {
-            // Oracle强制关闭反向工程，禁止通过连接字符串设置
-            if (builder.TryGetAndRemove(_.Migration, out var value) && !value.IsNullOrEmpty())
-            {
-                //var mode = (Migration)Enum.Parse(typeof(Migration), value, true);
-                //DAL.WriteLog("");
-            }
+            //// Oracle强制关闭反向工程，禁止通过连接字符串设置
+            //if (builder.TryGetAndRemove(_.Migration, out var value) && !value.IsNullOrEmpty())
+            //{
+            //    //var mode = (Migration)Enum.Parse(typeof(Migration), value, true);
+            //    //DAL.WriteLog("");
+            //}
 
             base.OnSetConnectionString(builder);
 
@@ -70,8 +72,8 @@ namespace XCode.DataAccessLayer
         /// <summary>实例化</summary>
         public Oracle()
         {
-            // Oracle强制关闭反向工程，无视配置文件设置，但代码设置和连接字符串设置有效
-            Migration = Migration.Off;
+            //// Oracle强制关闭反向工程，无视配置文件设置，但代码设置和连接字符串设置有效
+            //Migration = Migration.Off;
         }
         #endregion
 
@@ -108,14 +110,14 @@ namespace XCode.DataAccessLayer
             {
                 if (maximumRows <= 0) return sql;
 
-                if (!sql.ToLower().Contains("order by")) return "Select * From ({1}) T0 Where rownum<={0}".F(maximumRows, sql);
+                if (!sql.ToLower().Contains("order by")) return $"Select * From ({sql}) T0 Where rownum<={maximumRows}";
             }
 
             //if (maximumRows <= 0)
             //    sql = String.Format("Select * From ({1}) XCode_T0 Where rownum>={0}", startRowIndex + 1, sql);
             //else
-            sql = "Select * From (Select T0.*, rownum as rowNumber From ({1}) T0) T1 Where rowNumber>{0}".F(startRowIndex, sql);
-            if (maximumRows > 0) sql += " And rowNumber<={0}".F(startRowIndex + maximumRows);
+            sql = $"Select * From (Select T0.*, rownum as rowNumber From ({sql}) T0) T1 Where rowNumber>{startRowIndex}";
+            if (maximumRows > 0) sql += $" And rowNumber<={startRowIndex + maximumRows}";
 
             return sql;
         }
@@ -174,9 +176,9 @@ namespace XCode.DataAccessLayer
         /// <returns></returns>
         public override String FormatDateTime(DateTime dt)
         {
-            if (dt.Hour == 0 && dt.Minute == 0 && dt.Second == 0) return "To_Date('{0:yyyy-MM-dd}', 'YYYY-MM-DD')".F(dt);
+            if (dt.Hour == 0 && dt.Minute == 0 && dt.Second == 0) return $"To_Date('{dt:yyyy-MM-dd}', 'YYYY-MM-DD')";
 
-            return "To_Date('{0:yyyy-MM-dd HH:mm:ss}', 'YYYY-MM-DD HH24:MI:SS')".F(dt);
+            return $"To_Date('{dt:yyyy-MM-dd HH:mm:ss}', 'YYYY-MM-DD HH24:MI:SS')";
         }
 
         public override String FormatValue(IDataColumn field, Object value)
@@ -214,11 +216,11 @@ namespace XCode.DataAccessLayer
         /// <summary>创建参数</summary>
         /// <param name="name">名称</param>
         /// <param name="value">值</param>
-        /// <param name="field">字段</param>
+        /// <param name="type">类型</param>
         /// <returns></returns>
-        public override IDataParameter CreateParameter(String name, Object value, IDataColumn field = null)
+        public override IDataParameter CreateParameter(String name, Object value, Type type = null)
         {
-            var type = field?.DataType;
+            //var type = field?.DataType;
             if (type == null)
             {
                 type = value?.GetType();
@@ -244,7 +246,7 @@ namespace XCode.DataAccessLayer
                 return dp2;
             }
 
-            var dp = base.CreateParameter(name, value, field);
+            var dp = base.CreateParameter(name, value, type);
 
             // 修正时间映射
             if (type == typeof(DateTime)) dp.DbType = DbType.Date;
@@ -283,20 +285,20 @@ namespace XCode.DataAccessLayer
             return keyWord.Substring(0, pos + 1) + "\"" + tn + "\"";
         }
 
-        /// <summary>是否忽略大小写，如果不忽略则在表名字段名外面加上双引号</summary>
-        public Boolean IgnoreCase { get; set; } = true;
+        ///// <summary>是否忽略大小写，如果不忽略则在表名字段名外面加上双引号</summary>
+        //public Boolean IgnoreCase { get; set; } = true;
 
-        public override String FormatName(String name)
-        {
-            if (IgnoreCase)
-                return base.FormatName(name);
-            else
-                return FormatKeyWord(name);
-        }
+        //public override String FormatName(String name)
+        //{
+        //    if (IgnoreCase)
+        //        return base.FormatName(name);
+        //    else
+        //        return FormatKeyWord(name);
+        //}
         #endregion
 
         #region 辅助
-        Dictionary<String, DateTime> cache = new Dictionary<String, DateTime>();
+        readonly Dictionary<String, DateTime> cache = new Dictionary<String, DateTime>();
         public Boolean NeedAnalyzeStatistics(String tableName)
         {
             var owner = Owner;
@@ -305,7 +307,7 @@ namespace XCode.DataAccessLayer
             // 非当前用户，不支持统计
             if (!owner.EqualIgnoreCase(User)) return false;
 
-            var key = String.Format("{0}.{1}", owner, tableName);
+            var key = $"{owner}.{tableName}";
             if (!cache.TryGetValue(key, out var dt))
             {
                 dt = DateTime.MinValue;
@@ -338,6 +340,35 @@ namespace XCode.DataAccessLayer
         #endregion
 
         #region 基本方法 查询/执行
+        protected override DbTable OnFill(DbDataReader dr)
+        {
+            var dt = new DbTable();
+            dt.ReadHeader(dr);
+
+            Int32[] fields = null;
+
+            // 干掉rowNumber
+            var idx = Array.FindIndex(dt.Columns, c => c.EqualIgnoreCase("rowNumber"));
+            if (idx >= 0)
+            {
+                var cs = dt.Columns.ToList();
+                var ts = dt.Types.ToList();
+                var fs = Enumerable.Range(0, cs.Count).ToList();
+
+                cs.RemoveAt(idx);
+                ts.RemoveAt(idx);
+                fs.RemoveAt(idx);
+
+                dt.Columns = cs.ToArray();
+                dt.Types = ts.ToArray();
+                fields = fs.ToArray();
+            }
+
+            dt.ReadData(dr, fields);
+
+            return dt;
+        }
+
         /// <summary>快速查询单表记录数，稍有偏差</summary>
         /// <param name="tableName"></param>
         /// <returns></returns>
@@ -369,11 +400,11 @@ namespace XCode.DataAccessLayer
 
             //var sql = String.Format("select NUM_ROWS from sys.all_indexes where TABLE_OWNER='{0}' and TABLE_NAME='{1}' and UNIQUENESS='UNIQUE'", owner, tableName);
             // 某些表没有聚集索引，导致查出来的函数为零
-            var sql = String.Format("select NUM_ROWS from all_tables where OWNER='{0}' and TABLE_NAME='{1}'", owner, tableName);
+            var sql = $"select NUM_ROWS from all_tables where OWNER='{owner}' and TABLE_NAME='{tableName}'";
             return ExecuteScalar<Int64>(sql);
         }
 
-        static Regex reg_SEQ = new Regex(@"\b(\w+)\.nextval\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        static readonly Regex reg_SEQ = new Regex(@"\b(\w+)\.nextval\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         /// <summary>执行插入语句并返回新增行的自动编号</summary>
         /// <param name="sql">SQL语句</param>
         /// <param name="type">命令类型，默认SQL文本</param>
@@ -389,7 +420,7 @@ namespace XCode.DataAccessLayer
                 {
                     var m = reg_SEQ.Match(sql);
                     if (m != null && m.Success && m.Groups != null && m.Groups.Count > 0)
-                        rs = ExecuteScalar<Int64>(String.Format("Select {0}.currval From dual", m.Groups[1].Value));
+                        rs = ExecuteScalar<Int64>($"Select {m.Groups[1].Value}.currval From dual");
                 }
                 Commit();
                 return rs;
@@ -430,31 +461,31 @@ namespace XCode.DataAccessLayer
         #endregion
 
         #region 批量操作
-        public override Int32 Insert(String tableName, IDataColumn[] columns, IEnumerable<IIndexAccessor> list)
+        public override Int32 Insert(IDataTable table, IDataColumn[] columns, IEnumerable<IExtend> list)
         {
             var ps = new HashSet<String>();
-            var sql = GetInsertSql(tableName, columns, ps);
+            var sql = GetInsertSql(table, columns, ps);
             var dps = GetParameters(columns, ps, list);
 
             return Execute(sql, CommandType.Text, dps);
         }
 
-        private String GetInsertSql(String tableName, IDataColumn[] columns, ICollection<String> ps)
+        private String GetInsertSql(IDataTable table, IDataColumn[] columns, ICollection<String> ps)
         {
             var sb = Pool.StringBuilder.Get();
             var db = Database as DbBase;
 
             // 字段列表
-            sb.AppendFormat("Insert Into {0}(", db.FormatTableName(tableName));
+            sb.AppendFormat("Insert Into {0}(", db.FormatName(table));
             foreach (var dc in columns)
             {
                 //if (dc.Identity) continue;
 
-                sb.Append(db.FormatName(dc.ColumnName));
-                sb.Append(",");
+                sb.Append(db.FormatName(dc));
+                sb.Append(',');
             }
             sb.Length--;
-            sb.Append(")");
+            sb.Append(')');
 
             // 值列表
             sb.Append(" Values(");
@@ -463,17 +494,17 @@ namespace XCode.DataAccessLayer
                 //if (dc.Identity) continue;
 
                 sb.Append(db.FormatParameterName(dc.Name));
-                sb.Append(",");
+                sb.Append(',');
 
                 if (!ps.Contains(dc.Name)) ps.Add(dc.Name);
             }
             sb.Length--;
-            sb.Append(")");
+            sb.Append(')');
 
             return sb.Put(true);
         }
 
-        private IDataParameter[] GetParameters(IDataColumn[] columns, ICollection<String> ps, IEnumerable<IIndexAccessor> list)
+        private IDataParameter[] GetParameters(IDataColumn[] columns, ICollection<String> ps, IEnumerable<IExtend> list)
         {
             var db = Database;
             var dps = new List<IDataParameter>();
@@ -500,11 +531,11 @@ namespace XCode.DataAccessLayer
             return dps.ToArray();
         }
 
-        public override Int32 Upsert(String tableName, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list)
+        public override Int32 Upsert(IDataTable table, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IExtend> list)
         {
             var ps = new HashSet<String>();
-            var insert = GetInsertSql(tableName, columns, ps);
-            var update = GetUpdateSql(tableName, columns, updateColumns, addColumns, ps);
+            var insert = GetInsertSql(table, columns, ps);
+            var update = GetUpdateSql(table, columns, updateColumns, addColumns, ps);
 
             var sb = Pool.StringBuilder.Get();
             sb.AppendLine("BEGIN");
@@ -531,7 +562,7 @@ namespace XCode.DataAccessLayer
             return Execute(sql, CommandType.Text, dps);
         }
 
-        private String GetUpdateSql(String tableName, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, ICollection<String> ps)
+        private String GetUpdateSql(IDataTable table, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, ICollection<String> ps)
         {
             if ((updateColumns == null || updateColumns.Count == 0)
                 && (addColumns == null || addColumns.Count == 0)) return null;
@@ -540,20 +571,20 @@ namespace XCode.DataAccessLayer
             var db = Database as DbBase;
 
             // 字段列表
-            sb.AppendFormat("Update {0} Set ", db.FormatTableName(tableName));
+            sb.AppendFormat("Update {0} Set ", db.FormatName(table));
             foreach (var dc in columns)
             {
                 if (dc.Identity || dc.PrimaryKey) continue;
 
                 if (addColumns != null && addColumns.Contains(dc.Name))
                 {
-                    sb.AppendFormat("{0}={0}+{1},", db.FormatName(dc.ColumnName), db.FormatParameterName(dc.Name));
+                    sb.AppendFormat("{0}={0}+{1},", db.FormatName(dc), db.FormatParameterName(dc.Name));
 
                     if (!ps.Contains(dc.Name)) ps.Add(dc.Name);
                 }
                 else if (updateColumns != null && updateColumns.Contains(dc.Name))
                 {
-                    sb.AppendFormat("{0}={1},", db.FormatName(dc.ColumnName), db.FormatParameterName(dc.Name));
+                    sb.AppendFormat("{0}={1},", db.FormatName(dc), db.FormatParameterName(dc.Name));
 
                     if (!ps.Contains(dc.Name)) ps.Add(dc.Name);
                 }
@@ -566,7 +597,7 @@ namespace XCode.DataAccessLayer
             {
                 if (!dc.PrimaryKey) continue;
 
-                sb.AppendFormat("{0}={1}", db.FormatName(dc.ColumnName), db.FormatParameterName(dc.Name));
+                sb.AppendFormat("{0}={1}", db.FormatName(dc), db.FormatParameterName(dc.Name));
                 sb.Append(" And ");
 
                 if (!ps.Contains(dc.Name)) ps.Add(dc.Name);
@@ -576,17 +607,10 @@ namespace XCode.DataAccessLayer
             return sb.Put(true);
         }
 
-        /// <summary>批量更新</summary>
-        /// <param name="tableName">表名</param>
-        /// <param name="columns">要更新的字段，默认所有字段</param>
-        /// <param name="updateColumns">要更新的字段，默认脏数据</param>
-        /// <param name="addColumns">要累加更新的字段，默认累加</param>
-        /// <param name="list">实体列表</param>
-        /// <returns></returns>
-        public override Int32 Update(String tableName, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list)
+        public override Int32 Update(IDataTable table, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IExtend> list)
         {
             var ps = new HashSet<String>();
-            var sql = GetUpdateSql(tableName, columns, updateColumns, addColumns, ps);
+            var sql = GetUpdateSql(table, columns, updateColumns, addColumns, ps);
             var dps = GetParameters(columns, ps, list);
 
             return Execute(sql, CommandType.Text, dps);
@@ -624,7 +648,8 @@ namespace XCode.DataAccessLayer
             if (names != null)
             {
                 var db = Database as Oracle;
-                if (db.IgnoreCase) names = names.Select(e => db.IsReservedWord(e) ? e : e.ToUpper()).ToArray();
+                /*if (db.IgnoreCase)*/
+                names = names.Select(e => db.IsReservedWord(e) ? e : e.ToUpper()).ToArray();
             }
 
             // 采用集合过滤，提高效率
@@ -668,7 +693,7 @@ namespace XCode.DataAccessLayer
             {
                 //var tablenames = dt.Rows.ToArray().Select(e => "'{0}'".F(e["TABLE_NAME"]));
                 //mulTable = " And TABLE_NAME in ({0})".F(tablenames.Join(","));
-                mulTable = " And TABLE_NAME in ({0})".F(names.Select(e => "'{0}'".F(e)).Join(","));
+                mulTable = $" And TABLE_NAME in ({names.Select(e => $"'{e}'").Join(",")})";
             }
 
             // 列和索引
@@ -696,9 +721,9 @@ namespace XCode.DataAccessLayer
         private DataTable Get(String name, String owner, String tableName, String mulTable = null, String ownerName = null)
         {
             if (ownerName.IsNullOrEmpty()) ownerName = "Owner";
-            var sql = "Select * From {0} Where {2}='{1}'".F(name, owner, ownerName);
+            var sql = $"Select * From {name} Where {ownerName}='{owner}'";
             if (!tableName.IsNullOrEmpty())
-                sql += " And TABLE_NAME='{0}'".F(tableName);
+                sql += $" And TABLE_NAME='{tableName}'";
             else if (!mulTable.IsNullOrEmpty())
                 sql += mulTable;
 
@@ -713,7 +738,7 @@ namespace XCode.DataAccessLayer
             var dt = data?["PrimaryKeys"];
             if (dt != null && dt.Rows.Count > 0)
             {
-                var drs = dt.Select(String.Format("{0}='{1}'", _.TalbeName, table.TableName));
+                var drs = dt.Select($"{_.TalbeName}='{table.TableName}'");
                 if (drs != null && drs.Length > 0)
                 {
                     // 找到主键所在索引，这个索引的列才是主键
@@ -771,7 +796,7 @@ namespace XCode.DataAccessLayer
             var dt = data?["TableComment"];
             if (dt?.Rows == null || dt.Rows.Count < 1) return null;
 
-            var where = String.Format("TABLE_NAME='{0}'", name);
+            var where = $"TABLE_NAME='{name}'";
             var drs = dt.Select(where);
             if (drs != null && drs.Length > 0) return Convert.ToString(drs[0]["COMMENTS"]);
 
@@ -823,7 +848,7 @@ namespace XCode.DataAccessLayer
             var dt = data?["ColumnComment"];
             if (dt?.Rows == null || dt.Rows.Count < 1) return null;
 
-            var where = String.Format("{0}='{1}' AND {2}='{3}'", _.TalbeName, tableName, _.ColumnName, columnName);
+            var where = $"{_.TalbeName}='{tableName}' AND {_.ColumnName}='{columnName}'";
             var drs = dt.Select(where);
             if (drs != null && drs.Length > 0) return Convert.ToString(drs[0]["COMMENTS"]);
             return null;
@@ -875,7 +900,7 @@ namespace XCode.DataAccessLayer
                             type = typeof(Decimal);
                     }
                     field.DataType = type;
-                    if (prec > 0 && field.RawType.EqualIgnoreCase("NUMBER")) field.RawType += "({0},{1})".F(prec, fi.Scale);
+                    if (prec > 0 && field.RawType.EqualIgnoreCase("NUMBER")) field.RawType += $"({prec},{fi.Scale})";
                 }
             }
 
@@ -903,28 +928,28 @@ namespace XCode.DataAccessLayer
                 case TypeCode.Int16:
                 case TypeCode.UInt16:
                     if (precision <= 0) precision = 5;
-                    return String.Format("NUMBER({0}, 0)", precision);
+                    return $"NUMBER({precision}, 0)";
                 case TypeCode.Int32:
                 case TypeCode.UInt32:
                     //if (precision <= 0) precision = 10;
                     if (precision <= 0) return "NUMBER";
-                    return String.Format("NUMBER({0}, 0)", precision);
+                    return $"NUMBER({precision}, 0)";
                 case TypeCode.Int64:
                 case TypeCode.UInt64:
                     if (precision <= 0) precision = 20;
-                    return String.Format("NUMBER({0}, 0)", precision);
+                    return $"NUMBER({precision}, 0)";
                 case TypeCode.Single:
                     if (precision <= 0) precision = 5;
                     if (scale <= 0) scale = 1;
-                    return String.Format("NUMBER({0}, {1})", precision, scale);
+                    return $"NUMBER({precision}, {scale})";
                 case TypeCode.Double:
                     if (precision <= 0) precision = 10;
                     if (scale <= 0) scale = 2;
-                    return String.Format("NUMBER({0}, {1})", precision, scale);
+                    return $"NUMBER({precision}, {scale})";
                 case TypeCode.Decimal:
                     if (precision <= 0) precision = 20;
                     if (scale <= 0) scale = 4;
-                    return String.Format("NUMBER({0}, {1})", precision, scale);
+                    return $"NUMBER({precision}, {scale})";
                 default:
                     break;
             }
@@ -941,7 +966,7 @@ namespace XCode.DataAccessLayer
         }
 
         /// <summary>数据类型映射</summary>
-        private static Dictionary<Type, String[]> _DataTypes = new Dictionary<Type, String[]>
+        private static readonly Dictionary<Type, String[]> _DataTypes = new Dictionary<Type, String[]>
         {
             { typeof(Byte[]), new String[] { "RAW({0})", "BFILE", "BLOB", "LONG RAW" } },
             { typeof(Boolean), new String[] { "NUMBER(1,0)" } },
@@ -979,10 +1004,26 @@ namespace XCode.DataAccessLayer
 
         protected override String GetFieldConstraints(IDataColumn field, Boolean onlyDefine)
         {
-            if (field.Nullable)
-                return " NULL";
-            else
-                return " NOT NULL";
+            var str = field.Nullable ? " NULL" : " NOT NULL";
+
+            // 默认值
+            if (!field.Nullable && !field.Identity)
+            {
+                str = GetDefault(field, onlyDefine) + str;
+            }
+
+            return str;
+        }
+
+        /// <summary>默认值</summary>
+        /// <param name="field"></param>
+        /// <param name="onlyDefine"></param>
+        /// <returns></returns>
+        protected override String GetDefault(IDataColumn field, Boolean onlyDefine)
+        {
+            if (field.DataType == typeof(DateTime)) return " DEFAULT To_Date('0001-01-01','yyyy-mm-dd')";
+
+            return base.GetDefault(field, onlyDefine);
         }
 
         public override String CreateTableSQL(IDataTable table)
@@ -991,32 +1032,24 @@ namespace XCode.DataAccessLayer
 
             var sb = new StringBuilder(32 + fs.Count * 20);
 
-            sb.AppendFormat("Create Table {0}(", FormatName(table.TableName));
+            sb.AppendFormat("Create Table {0}(", FormatName(table));
             for (var i = 0; i < fs.Count; i++)
             {
                 sb.AppendLine();
-                sb.Append("\t");
+                sb.Append('\t');
                 sb.Append(FieldClause(fs[i], true));
-                if (i < fs.Count - 1) sb.Append(",");
+                if (i < fs.Count - 1) sb.Append(',');
             }
 
             // 主键
             var pks = table.PrimaryKeys;
             if (pks != null && pks.Length > 0)
             {
-                sb.AppendLine(",");
-                sb.Append("\t");
-                sb.AppendFormat("constraint pk_{0} primary key (", table.TableName);
-                for (var i = 0; i < pks.Length; i++)
-                {
-                    if (i > 0) sb.Append(",");
-                    sb.Append(FormatName(pks[i].ColumnName));
-                }
-                sb.Append(")");
+                sb.AppendFormat(",\r\n\tconstraint pk_{0} primary key ({1})", table.TableName, pks.Join(",", FormatName));
             }
 
             sb.AppendLine();
-            sb.Append(")");
+            sb.Append(')');
 
             //// 处理延迟段执行
             //if (Database is Oracle db)
@@ -1075,60 +1108,19 @@ namespace XCode.DataAccessLayer
         //    return sql + "; " + Environment.NewLine + sqlSeq;
         //}
 
-        public override String AddColumnSQL(IDataColumn field)
-        {
-            var owner = Owner;
-            if (owner.EqualIgnoreCase(UserID))
-                return String.Format("Alter Table {0} Add {1}", FormatName(field.Table.TableName), FieldClause(field, true));
-            else
-                return String.Format("Alter Table {2}.{0} Add {1}", FormatName(field.Table.TableName), FieldClause(field, true), owner);
-        }
+        public override String AddColumnSQL(IDataColumn field) => $"Alter Table {FormatName(field.Table)} Add {FieldClause(field, true)}";
 
-        public override String AlterColumnSQL(IDataColumn field, IDataColumn oldfield)
-        {
-            var owner = Owner;
-            if (owner.EqualIgnoreCase(UserID))
-                return String.Format("Alter Table {0} Modify {1}", FormatName(field.Table.TableName), FieldClause(field, false));
-            else
-                return String.Format("Alter Table {2}.{0} Modify {1}", FormatName(field.Table.TableName), FieldClause(field, false), owner);
-        }
+        public override String AlterColumnSQL(IDataColumn field, IDataColumn oldfield) => $"Alter Table {FormatName(field.Table)} Modify {FieldClause(field, false)}";
 
-        public override String DropColumnSQL(IDataColumn field)
-        {
-            var owner = Owner;
-            if (owner.EqualIgnoreCase(UserID))
-                return String.Format("Alter Table {0} Drop Column {1}", FormatName(field.Table.TableName), field.ColumnName);
-            else
-                return String.Format("Alter Table {2}.{0} Drop Column {1}", FormatName(field.Table.TableName), field.ColumnName, owner);
-        }
+        public override String DropColumnSQL(IDataColumn field) => $"Alter Table {FormatName(field.Table)} Drop Column {field}";
 
-        public override String AddTableDescriptionSQL(IDataTable table)
-        {
-            //return String.Format("Update USER_TAB_COMMENTS Set COMMENTS='{0}' Where TABLE_NAME='{1}'", table.Description, table.Name);
+        public override String AddTableDescriptionSQL(IDataTable table) => $"Comment On Table {FormatName(table)} is '{table.Description}'";
 
-            return String.Format("Comment On Table {0} is '{1}'", FormatName(table.TableName), table.Description);
-        }
+        public override String DropTableDescriptionSQL(IDataTable table) => $"Comment On Table {FormatName(table)} is ''";
 
-        public override String DropTableDescriptionSQL(IDataTable table)
-        {
-            //return String.Format("Update USER_TAB_COMMENTS Set COMMENTS='' Where TABLE_NAME='{0}'", table.Name);
+        public override String AddColumnDescriptionSQL(IDataColumn field) => $"Comment On Column {FormatName(field.Table)}.{FormatName(field)} is '{field.Description}'";
 
-            return String.Format("Comment On Table {0} is ''", FormatName(table.TableName));
-        }
-
-        public override String AddColumnDescriptionSQL(IDataColumn field)
-        {
-            //return String.Format("Update USER_COL_COMMENTS Set COMMENTS='{0}' Where TABLE_NAME='{1}' AND COLUMN_NAME='{2}'", field.Description, field.Table.Name, field.Name);
-
-            return String.Format("Comment On Column {0}.{1} is '{2}'", FormatName(field.Table.TableName), FormatName(field.ColumnName), field.Description);
-        }
-
-        public override String DropColumnDescriptionSQL(IDataColumn field)
-        {
-            //return String.Format("Update USER_COL_COMMENTS Set COMMENTS='' Where TABLE_NAME='{0}' AND COLUMN_NAME='{1}'", field.Table.Name, field.Name);
-
-            return String.Format("Comment On Column {0}.{1} is ''", FormatName(field.Table.TableName), FormatName(field.ColumnName));
-        }
+        public override String DropColumnDescriptionSQL(IDataColumn field) => $"Comment On Column {FormatName(field.Table)}.{FormatName(field)} is ''";
         #endregion
     }
 }

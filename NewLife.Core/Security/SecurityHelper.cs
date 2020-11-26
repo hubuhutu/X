@@ -1,9 +1,10 @@
-﻿using System.IO;
+﻿using System;
+using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using NewLife.Security;
 
-namespace System
+namespace NewLife
 {
     /// <summary>安全算法</summary>
     public static class SecurityHelper
@@ -78,6 +79,12 @@ namespace System
         /// <param name="key"></param>
         /// <returns></returns>
         public static Byte[] SHA512(this Byte[] data, Byte[] key) => new HMACSHA512(key).ComputeHash(data);
+
+        /// <summary>Murmur128哈希</summary>
+        /// <param name="data"></param>
+        /// <param name="seed"></param>
+        /// <returns></returns>
+        public static Byte[] Murmur128(this Byte[] data, UInt32 seed = 0) => new Murmur128(seed).ComputeHash(data);
         #endregion
 
         #region 同步加密扩展
@@ -122,25 +129,23 @@ namespace System
             }
 
             var outstream = new MemoryStream();
-            using (var stream = new CryptoStream(outstream, sa.CreateEncryptor(), CryptoStreamMode.Write))
+            using var stream = new CryptoStream(outstream, sa.CreateEncryptor(), CryptoStreamMode.Write);
+            stream.Write(data, 0, data.Length);
+
+            // 数据长度必须是8的倍数
+            if (sa.Padding == PaddingMode.None)
             {
-                stream.Write(data, 0, data.Length);
-
-                // 数据长度必须是8的倍数
-                if (sa.Padding == PaddingMode.None)
+                var len = data.Length % 8;
+                if (len > 0)
                 {
-                    var len = data.Length % 8;
-                    if (len > 0)
-                    {
-                        var buf = new Byte[8 - len];
-                        stream.Write(buf, 0, buf.Length);
-                    }
+                    var buf = new Byte[8 - len];
+                    stream.Write(buf, 0, buf.Length);
                 }
-
-                stream.FlushFinalBlock();
-
-                return outstream.ToArray();
             }
+
+            stream.FlushFinalBlock();
+
+            return outstream.ToArray();
         }
 
         /// <summary>对称解密算法扩展
@@ -150,7 +155,7 @@ namespace System
         /// <param name="instream"></param>
         /// <param name="outstream"></param>
         /// <returns></returns>
-        public static SymmetricAlgorithm Descrypt(this SymmetricAlgorithm sa, Stream instream, Stream outstream)
+        public static SymmetricAlgorithm Decrypt(this SymmetricAlgorithm sa, Stream instream, Stream outstream)
         {
             using (var stream = new CryptoStream(instream, sa.CreateDecryptor(), CryptoStreamMode.Read))
             {
@@ -167,7 +172,7 @@ namespace System
         /// <param name="mode">模式。.Net默认CBC，Java默认ECB</param>
         /// <param name="padding">填充算法。默认PKCS7，等同Java的PKCS5</param>
         /// <returns></returns>
-        public static Byte[] Descrypt(this SymmetricAlgorithm sa, Byte[] data, Byte[] pass = null, CipherMode mode = CipherMode.CBC, PaddingMode padding = PaddingMode.PKCS7)
+        public static Byte[] Decrypt(this SymmetricAlgorithm sa, Byte[] data, Byte[] pass = null, CipherMode mode = CipherMode.CBC, PaddingMode padding = PaddingMode.PKCS7)
         {
             if (data == null || data.Length < 1) throw new ArgumentNullException(nameof(data));
 
@@ -183,10 +188,8 @@ namespace System
                 sa.Padding = padding;
             }
 
-            using (var stream = new CryptoStream(new MemoryStream(data), sa.CreateDecryptor(), CryptoStreamMode.Read))
-            {
-                return stream.ReadBytes();
-            }
+            using var stream = new CryptoStream(new MemoryStream(data), sa.CreateDecryptor(), CryptoStreamMode.Read);
+            return stream.ReadBytes();
         }
 
         private static Byte[] Pad(Byte[] buf, Int32 length)
@@ -205,7 +208,7 @@ namespace System
         /// <param name="data"></param>
         /// <param name="pass"></param>
         /// <returns></returns>
-        public static Byte[] RC4(this Byte[] data, Byte[] pass) { return NewLife.Security.RC4.Encrypt(data, pass); }
+        public static Byte[] RC4(this Byte[] data, Byte[] pass) => NewLife.Security.RC4.Encrypt(data, pass);
         #endregion
     }
 }

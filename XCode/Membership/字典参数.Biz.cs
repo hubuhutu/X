@@ -2,26 +2,12 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
-using System.IO;
 using System.Linq;
-using System.Reflection;
-using System.Text;
-using System.Threading.Tasks;
-using System.Web;
-using System.Xml.Serialization;
 using NewLife;
 using NewLife.Collections;
 using NewLife.Data;
-using NewLife.Log;
-using NewLife.Model;
 using NewLife.Reflection;
-using NewLife.Threading;
-using NewLife.Web;
 using XCode;
-using XCode.Cache;
-using XCode.Configuration;
-using XCode.DataAccessLayer;
-using XCode.Membership;
 
 namespace XCode.Membership
 {
@@ -62,7 +48,8 @@ namespace XCode.Membership
     }
 
     /// <summary>字典参数</summary>
-    public partial class Parameter : EntityTree<Parameter>
+    [ModelCheckMode(ModelCheckModes.CheckTableWhenFirstUse)]
+    public partial class Parameter : Entity<Parameter>
     {
         #region 对象操作
         static Parameter()
@@ -106,31 +93,77 @@ namespace XCode.Membership
             return Find(_.ID == id);
         }
 
-        /// <summary>根据类别、名称查找</summary>
-        /// <param name="category">类别</param>
-        /// <param name="name">名称</param>
-        /// <returns>实体对象</returns>
-        public static Parameter FindByCategoryAndName(String category, String name)
+        /// <summary>根据用户查找</summary>
+        /// <param name="userId">用户</param>
+        /// <returns>实体列表</returns>
+        public static IList<Parameter> FindAllByUserID(Int32 userId)
         {
             // 实体缓存
-            if (Meta.Session.Count < 1000) return Meta.Cache.Find(e => e.Category == category && e.Name == name);
+            if (Meta.Session.Count < 1000) return Meta.Cache.FindAll(e => e.UserID == userId);
 
-            return Find(_.Category == category & _.Name == name);
+            return FindAll(_.UserID == userId);
         }
 
-        /// <summary>根据名称查找</summary>
-        /// <param name="name">名称</param>
+        /// <summary>根据用户查找</summary>
+        /// <param name="userId">用户</param>
+        /// <param name="category">分类</param>
         /// <returns>实体列表</returns>
-        public static IList<Parameter> FindAllByName(String name)
+        public static IList<Parameter> FindAllByUserID(Int32 userId, String category)
         {
             // 实体缓存
-            if (Meta.Session.Count < 1000) return Meta.Cache.FindAll(e => e.Name == name);
+            if (Meta.Session.Count < 1000) return Meta.Cache.FindAll(e => e.UserID == userId && e.Category == category);
 
-            return FindAll(_.Name == name);
+            return FindAll(_.UserID == userId & _.Category == category);
         }
         #endregion
 
         #region 高级查询
+        /// <summary>高级搜索</summary>
+        /// <param name="userId"></param>
+        /// <param name="category"></param>
+        /// <param name="enable"></param>
+        /// <param name="key"></param>
+        /// <param name="page"></param>
+        /// <returns></returns>
+        public static IList<Parameter> Search(Int32 userId, String category, Boolean? enable, String key, PageParameter page)
+        {
+            var exp = new WhereExpression();
+
+            if (userId >= 0) exp &= _.UserID == userId;
+            if (!category.IsNullOrEmpty()) exp &= _.Category == category;
+            if (enable != null) exp &= _.Enable == enable.Value;
+            if (!key.IsNullOrEmpty()) exp &= _.Name == key | _.Value.Contains(key);
+
+            return FindAll(exp, page);
+        }
+
+        /// <summary>获取 或 添加 参数，支持指定默认值</summary>
+        /// <param name="userId"></param>
+        /// <param name="category"></param>
+        /// <param name="name"></param>
+        /// <param name="defaultValue"></param>
+        /// <returns></returns>
+        public static Parameter GetOrAdd(Int32 userId, String category, String name, String defaultValue = null)
+        {
+            var list = FindAllByUserID(userId);
+            var p = list.FirstOrDefault(e => e.Category == category && e.Name == name);
+            if (p == null)
+            {
+                p = new Parameter { UserID = userId, Category = category, Name = name, Enable = true, Value = defaultValue };
+
+                try
+                {
+                    p.Insert();
+                }
+                catch
+                {
+                    var p2 = Find(_.UserID == userId & _.Category == category & _.Name == name);
+                    if (p2 != null) return p2;
+                }
+            }
+
+            return p;
+        }
         #endregion
 
         #region 业务操作
@@ -140,7 +173,6 @@ namespace XCode.Membership
         {
             var str = Value;
             if (str.IsNullOrEmpty()) str = LongValue;
-
             if (str.IsNullOrEmpty()) return null;
 
             switch (Kind)
@@ -154,7 +186,9 @@ namespace XCode.Membership
             switch (Kind)
             {
                 case ParameterKinds.Boolean: return str.ToBoolean();
-                case ParameterKinds.Int: return str.ToLong();
+                case ParameterKinds.Int:
+                    var v = str.ToLong();
+                    return (v >= Int32.MaxValue || v <= Int32.MinValue) ? (Object)v : (Int32)v;
                 case ParameterKinds.Double: return str.ToDouble();
                 case ParameterKinds.DateTime: return str.ToDateTime();
                 case ParameterKinds.String: return str;
@@ -169,45 +203,24 @@ namespace XCode.Membership
         {
             if (value == null)
             {
-                Kind = ParameterKinds.Normal;
+                //Kind = ParameterKinds.Normal;
                 Value = null;
+                LongValue = null;
                 Remark = null;
                 return;
             }
 
-            var type = value.GetType();
-
             // 列表
-            if (type.As<IList>())
+            if (value is IList list)
             {
-                Kind = ParameterKinds.List;
-
-                var list = value as IList;
-                var sb = Pool.StringBuilder.Get();
-                foreach (var item in list)
-                {
-                    if (sb.Length > 0) sb.Append(",");
-                    // F函数可以很好处理时间格式化
-                    sb.Append("{0}".F(item));
-                }
-                SetValueInternal(sb.Put(true));
+                SetList(list);
                 return;
             }
 
             // 名值
-            if (type.As<IDictionary>())
+            if (value is IDictionary dic)
             {
-                Kind = ParameterKinds.Hash;
-
-                var dic = value as IDictionary;
-                var sb = Pool.StringBuilder.Get();
-                foreach (DictionaryEntry item in dic)
-                {
-                    if (sb.Length > 0) sb.Append(",");
-                    // F函数可以很好处理时间格式化
-                    sb.Append("{0}={1}".F(item.Key, item.Value));
-                }
-                SetValueInternal(sb.Put(true));
+                SetHash(dic);
                 return;
             }
 
@@ -215,7 +228,7 @@ namespace XCode.Membership
             {
                 case TypeCode.Boolean:
                     Kind = ParameterKinds.Boolean;
-                    Value = value.ToString().ToLower();
+                    SetValueInternal(value.ToString().ToLower());
                     break;
                 case TypeCode.SByte:
                 case TypeCode.Byte:
@@ -226,47 +239,45 @@ namespace XCode.Membership
                 case TypeCode.Int64:
                 case TypeCode.UInt64:
                     Kind = ParameterKinds.Int;
-                    Value = value + "";
+                    SetValueInternal(value + "");
                     break;
                 case TypeCode.Single:
                 case TypeCode.Double:
                 case TypeCode.Decimal:
                     Kind = ParameterKinds.Double;
-                    Value = value + "";
+                    SetValueInternal(value + "");
                     break;
                 case TypeCode.DateTime:
                     Kind = ParameterKinds.DateTime;
-                    Value = ((DateTime)value).ToFullString();
+                    SetValueInternal(((DateTime)value).ToFullString());
                     break;
                 case TypeCode.Char:
                 case TypeCode.String:
                     Kind = ParameterKinds.String;
-                    var str = value + "";
-                    if (str.Length < 200)
-                        Value = str;
-                    else
-                        LongValue = str;
+                    SetValueInternal(value + "");
                     break;
                 case TypeCode.Empty:
                 case TypeCode.Object:
                 case TypeCode.DBNull:
                 default:
+                    Kind = ParameterKinds.Normal;
+                    SetValueInternal(value + "");
                     break;
-            }
-
-            // 默认
-            {
-                Kind = ParameterKinds.Normal;
-                SetValueInternal(value + "");
             }
         }
 
         private void SetValueInternal(String str)
         {
             if (str.Length < 200)
+            {
                 Value = str;
+                LongValue = null;
+            }
             else
+            {
+                Value = null;
                 LongValue = str;
+            }
         }
 
         /// <summary>获取列表</summary>
@@ -292,6 +303,36 @@ namespace XCode.Membership
 
             var dic = Value.SplitAsDictionary("=", ",");
             return dic.ToDictionary(e => e.Key.ChangeType<TKey>(), e => e.Value.ChangeType<TValue>());
+        }
+
+        /// <summary>设置列表</summary>
+        /// <param name="list"></param>
+        public void SetList(IList list)
+        {
+            Kind = ParameterKinds.List;
+
+            var sb = Pool.StringBuilder.Get();
+            foreach (var item in list)
+            {
+                if (sb.Length > 0) sb.Append(',');
+                sb.Append(item);
+            }
+            SetValueInternal(sb.Put(true));
+        }
+
+        /// <summary>设置名值对</summary>
+        /// <param name="dic"></param>
+        public void SetHash(IDictionary dic)
+        {
+            Kind = ParameterKinds.Hash;
+
+            var sb = Pool.StringBuilder.Get();
+            foreach (DictionaryEntry item in dic)
+            {
+                if (sb.Length > 0) sb.Append(',');
+                sb.AppendFormat("{0}={1}", item.Key, item.Value);
+            }
+            SetValueInternal(sb.Put(true));
         }
         #endregion
     }

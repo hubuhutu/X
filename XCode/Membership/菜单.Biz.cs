@@ -2,35 +2,29 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using System.Text;
-using System.Web;
+using System.Runtime.Serialization;
 using System.Web.Script.Serialization;
 using System.Xml.Serialization;
 using NewLife;
-using NewLife.Log;
-using NewLife.Model;
-using NewLife.Reflection;
 using NewLife.Collections;
+using NewLife.Log;
+using NewLife.Reflection;
 using NewLife.Threading;
 
 namespace XCode.Membership
 {
     /// <summary>菜单</summary>
-    [Serializable]
-    [ModelCheckMode(ModelCheckModes.CheckTableWhenFirstUse)]
-    public class Menu : Menu<Menu> { }
-
-    /// <summary>菜单</summary>
-    public partial class Menu<TEntity> : EntityTree<TEntity>, IMenu where TEntity : Menu<TEntity>, new()
+    public partial class Menu : EntityTree<Menu>, IMenu
     {
         #region 对象操作
         static Menu()
         {
-            var entity = new TEntity();
+            // 引发内部
+            new Menu();
 
-            EntityFactory.Register(typeof(TEntity), new MenuFactory());
+            EntityFactory.Register(typeof(Menu), new MenuFactory());
 
-            ObjectContainer.Current.AutoRegister<IMenuFactory, MenuFactory>();
+            //ObjectContainer.Current.AutoRegister<IMenuFactory, MenuFactory>();
         }
 
         /// <summary>验证数据，通过抛出异常的方式提示验证失败。</summary>
@@ -80,12 +74,12 @@ namespace XCode.Membership
         /// <returns></returns>
         protected override Int32 OnDelete()
         {
-            LogProvider.Provider.WriteLog("删除", this);
-
-            // 递归删除子菜单
-            var rs = 0;
-            using (var ts = Meta.CreateTrans())
+            var err = "";
+            try
             {
+                // 递归删除子菜单
+                var rs = 0;
+                using var ts = Meta.CreateTrans();
                 rs += base.OnDelete();
 
                 var ms = Childs;
@@ -100,6 +94,15 @@ namespace XCode.Membership
                 ts.Commit();
 
                 return rs;
+            }
+            catch (Exception ex)
+            {
+                err = ex.Message;
+                throw;
+            }
+            finally
+            {
+                LogProvider.Provider.WriteLog("删除", this, err);
             }
         }
 
@@ -124,12 +127,12 @@ namespace XCode.Membership
 
         #region 扩展属性
         /// <summary></summary>
-        [XmlIgnore, ScriptIgnore]
+        [XmlIgnore, ScriptIgnore, IgnoreDataMember]
         public String Url2 => Url?.Replace("~", "");
 
         /// <summary>父菜单名</summary>
-        [XmlIgnore, ScriptIgnore]
-        public virtual String ParentMenuName { get { return Parent?.Name; } set { } }
+        [XmlIgnore, ScriptIgnore, IgnoreDataMember]
+        public virtual String ParentMenuName { get => Parent?.Name; set { } }
 
         /// <summary>必要的菜单。必须至少有角色拥有这些权限，如果没有则自动授权给系统角色</summary>
         internal static Int32[] Necessaries
@@ -146,7 +149,7 @@ namespace XCode.Membership
         }
 
         /// <summary>友好名称。优先显示名</summary>
-        [XmlIgnore, ScriptIgnore]
+        [XmlIgnore, ScriptIgnore, IgnoreDataMember]
         public String FriendName => DisplayName.IsNullOrWhiteSpace() ? Name : DisplayName;
         #endregion
 
@@ -154,7 +157,7 @@ namespace XCode.Membership
         /// <summary>根据编号查找</summary>
         /// <param name="id"></param>
         /// <returns></returns>
-        public static TEntity FindByID(Int32 id)
+        public static Menu FindByID(Int32 id)
         {
             if (id <= 0) return null;
 
@@ -164,22 +167,22 @@ namespace XCode.Membership
         /// <summary>根据名字查找</summary>
         /// <param name="name">名称</param>
         /// <returns></returns>
-        public static TEntity FindByName(String name) => Meta.Cache.Find(e => e.Name.EqualIgnoreCase(name));
+        public static Menu FindByName(String name) => Meta.Cache.Find(e => e.Name.EqualIgnoreCase(name));
 
         /// <summary>根据全名查找</summary>
         /// <param name="name">全名</param>
         /// <returns></returns>
-        public static TEntity FindByFullName(String name) => Meta.Cache.Find(e => e.FullName.EqualIgnoreCase(name));
+        public static Menu FindByFullName(String name) => Meta.Cache.Find(e => e.FullName.EqualIgnoreCase(name));
 
         /// <summary>根据Url查找</summary>
         /// <param name="url"></param>
         /// <returns></returns>
-        public static TEntity FindByUrl(String url) => Meta.Cache.Find(e => e.Url.EqualIgnoreCase(url));
+        public static Menu FindByUrl(String url) => Meta.Cache.Find(e => e.Url.EqualIgnoreCase(url));
 
         /// <summary>根据名字查找，支持路径查找</summary>
         /// <param name="name">名称</param>
         /// <returns></returns>
-        public static TEntity FindForName(String name)
+        public static Menu FindForName(String name)
         {
             var entity = FindByName(name);
             if (entity != null) return entity;
@@ -190,7 +193,7 @@ namespace XCode.Membership
         /// <summary>查找指定菜单的子菜单</summary>
         /// <param name="id"></param>
         /// <returns></returns>
-        public static List<TEntity> FindAllByParentID(Int32 id) => Meta.Cache.FindAll(e => e.ParentID == id).OrderByDescending(e => e.Sort).ThenBy(e => e.ID).ToList();
+        public static List<Menu> FindAllByParentID(Int32 id) => Meta.Cache.FindAll(e => e.ParentID == id).OrderByDescending(e => e.Sort).ThenBy(e => e.ID).ToList();
 
         /// <summary>取得当前角色的子菜单，有权限、可显示、排序</summary>
         /// <param name="filters"></param>
@@ -216,14 +219,13 @@ namespace XCode.Membership
         /// <returns></returns>
         public IMenu Add(String name, String displayName, String fullName, String url)
         {
-            var entity = new TEntity
+            var entity = new Menu
             {
                 Name = name,
                 DisplayName = displayName,
                 FullName = fullName,
                 Url = url,
                 ParentID = ID,
-                Parent = this as TEntity,
 
                 Visible = ID == 0 || displayName != null
             };
@@ -236,10 +238,10 @@ namespace XCode.Membership
 
         #region 扩展权限
         /// <summary>可选权限子项</summary>
-        [XmlIgnore, ScriptIgnore]
+        [XmlIgnore, ScriptIgnore, IgnoreDataMember]
         public Dictionary<Int32, String> Permissions { get; set; } = new Dictionary<Int32, String>();
 
-        void LoadPermission()
+        private void LoadPermission()
         {
             Permissions.Clear();
             if (String.IsNullOrEmpty(Permission)) return;
@@ -252,7 +254,7 @@ namespace XCode.Membership
             }
         }
 
-        void SavePermission()
+        private void SavePermission()
         {
             // 不能这样子直接清空，因为可能没有任何改变，而这么做会两次改变脏数据，让系统以为有改变
             //Permission = null;
@@ -267,7 +269,7 @@ namespace XCode.Membership
             // 根据资源按照从小到大排序一下
             foreach (var item in Permissions.OrderBy(e => e.Key))
             {
-                if (sb.Length > 0) sb.Append(",");
+                if (sb.Length > 0) sb.Append(',');
                 sb.AppendFormat("{0}#{1}", item.Key, item.Value);
             }
             SetItem(__.Permission, sb.Put(true));
@@ -275,10 +277,10 @@ namespace XCode.Membership
         #endregion
 
         #region 日志
-        /// <summary>写日志</summary>
-        /// <param name="action">操作</param>
-        /// <param name="remark">备注</param>
-        public static void WriteLog(String action, String remark) => LogProvider.Provider.WriteLog(typeof(TEntity), action, remark);
+        ///// <summary>写日志</summary>
+        ///// <param name="action">操作</param>
+        ///// <param name="remark">备注</param>
+        //public static void WriteLog(String action, String remark) => LogProvider.Provider.WriteLog(typeof(Menu), action, remark);
         #endregion
 
         #region 辅助
@@ -301,7 +303,7 @@ namespace XCode.Membership
         /// <returns></returns>
         String IMenu.GetFullPath(Boolean includeSelf, String separator, Func<IMenu, String> func)
         {
-            Func<TEntity, String> d = null;
+            Func<Menu, String> d = null;
             if (func != null) d = item => func(item);
 
             return GetFullPath(includeSelf, separator, d);
@@ -438,7 +440,12 @@ namespace XCode.Membership
                     var func = type.GetMethodEx("ScanActionMenu");
                     if (func == null) continue;
 
-                    var acts = func.As<Func<IMenu, IDictionary<MethodInfo, Int32>>>(type.CreateInstance()).Invoke(controller);
+                    // 由于控制器使用IOC，无法直接实例化控制器，需要给各个参数传入空
+                    var ctor = type.GetConstructors()?.FirstOrDefault();
+                    var ctrl = ctor.Invoke(new Object[ctor.GetParameters().Length]);
+                    //var ctrl = type.CreateInstance();
+
+                    var acts = func.As<Func<IMenu, IDictionary<MethodInfo, Int32>>>(ctrl).Invoke(controller);
                     if (acts == null || acts.Count == 0) continue;
 
                     // 可选权限子项
@@ -450,7 +457,7 @@ namespace XCode.Membership
                         var method = item.Key;
 
                         var dn = method.GetDisplayName();
-                        if (!dn.IsNullOrEmpty()) dn = dn.Replace("{type}", (controller as TEntity)?.FriendName);
+                        if (!dn.IsNullOrEmpty()) dn = dn.Replace("{type}", (controller as Menu)?.FriendName);
 
                         var pmName = !dn.IsNullOrEmpty() ? dn : method.Name;
                         if (item.Value <= (Int32)PermissionFlags.Delete) pmName = ((PermissionFlags)item.Value).GetDescription();
@@ -476,8 +483,8 @@ namespace XCode.Membership
                     ThreadPoolX.QueueUserWorkItem(() =>
                     {
                         XTrace.WriteLine("新增了菜单，需要检查权限");
-                        var eop = ManageProvider.GetFactory<IRole>();
-                        eop.EntityType.Invoke("CheckRole");
+                        var fact = ManageProvider.GetFactory<IRole>();
+                        fact.EntityType.Invoke("CheckRole");
                     });
                 }
 
@@ -523,8 +530,89 @@ namespace XCode.Membership
         IList<IMenu> ScanController(String rootName, Assembly asm, String nameSpace);
     }
 
+    /// <summary>菜单接口</summary>
     public partial interface IMenu
     {
+        #region 属性
+        /// <summary>编号</summary>
+        Int32 ID { get; set; }
+
+        /// <summary>名称</summary>
+        String Name { get; set; }
+
+        /// <summary>显示名</summary>
+        String DisplayName { get; set; }
+
+        /// <summary>全名</summary>
+        String FullName { get; set; }
+
+        /// <summary>父编号</summary>
+        Int32 ParentID { get; set; }
+
+        /// <summary>链接</summary>
+        String Url { get; set; }
+
+        /// <summary>排序</summary>
+        Int32 Sort { get; set; }
+
+        /// <summary>图标</summary>
+        String Icon { get; set; }
+
+        /// <summary>可见</summary>
+        Boolean Visible { get; set; }
+
+        /// <summary>必要。必要的菜单，必须至少有角色拥有这些权限，如果没有则自动授权给系统角色</summary>
+        Boolean Necessary { get; set; }
+
+        /// <summary>权限子项。逗号分隔，每个权限子项名值竖线分隔</summary>
+        String Permission { get; set; }
+
+        /// <summary>扩展1</summary>
+        Int32 Ex1 { get; set; }
+
+        /// <summary>扩展2</summary>
+        Int32 Ex2 { get; set; }
+
+        /// <summary>扩展3</summary>
+        Double Ex3 { get; set; }
+
+        /// <summary>扩展4</summary>
+        String Ex4 { get; set; }
+
+        /// <summary>扩展5</summary>
+        String Ex5 { get; set; }
+
+        /// <summary>扩展6</summary>
+        String Ex6 { get; set; }
+
+        /// <summary>创建者</summary>
+        String CreateUser { get; set; }
+
+        /// <summary>创建用户</summary>
+        Int32 CreateUserID { get; set; }
+
+        /// <summary>创建地址</summary>
+        String CreateIP { get; set; }
+
+        /// <summary>创建时间</summary>
+        DateTime CreateTime { get; set; }
+
+        /// <summary>更新者</summary>
+        String UpdateUser { get; set; }
+
+        /// <summary>更新用户</summary>
+        Int32 UpdateUserID { get; set; }
+
+        /// <summary>更新地址</summary>
+        String UpdateIP { get; set; }
+
+        /// <summary>更新时间</summary>
+        DateTime UpdateTime { get; set; }
+
+        /// <summary>备注</summary>
+        String Remark { get; set; }
+        #endregion
+
         /// <summary>取得全路径的实体，由上向下排序</summary>
         /// <param name="includeSelf">是否包含自己</param>
         /// <param name="separator">分隔符</param>

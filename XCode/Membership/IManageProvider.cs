@@ -1,13 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Security.Principal;
-using System.Text;
 using System.Threading;
-using System.Web;
-using NewLife.Common;
+using NewLife;
+using NewLife.Collections;
 using NewLife.Model;
-using NewLife.Web;
 using XCode.Model;
 
 namespace XCode.Membership
@@ -77,26 +73,22 @@ namespace XCode.Membership
         #region 静态实例
         static ManageProvider()
         {
-            var ioc = ObjectContainer.Current;
-            // 外部管理提供者需要手工覆盖
-            //ioc.Register<IManageProvider, DefaultManageProvider>();
-
-            ioc.AutoRegister<IRole, Role>()
-                .AutoRegister<IMenu, Menu>()
-                .AutoRegister<ILog, Log>()
-                .AutoRegister<IUser, UserX>();
+            Register<IRole>(Role.Meta.Factory);
+            Register<IMenu>(Membership.Menu.Meta.Factory);
+            Register<ILog>(Log.Meta.Factory);
+            Register<IUser>(Membership.User.Meta.Factory);
         }
 
         /// <summary>当前管理提供者</summary>
-        public static IManageProvider Provider => ObjectContainer.Current.ResolveInstance<IManageProvider>();
+        public static IManageProvider Provider { get; set; }
 
         /// <summary>当前登录用户</summary>
-        public static IUser User { get => Provider.Current as IUser; set => Provider.Current = value as IManageUser; }
+        public static IUser User { get => Provider?.Current as IUser; set => Provider.Current = value as IManageUser; }
 
         /// <summary>菜单工厂</summary>
         public static IMenuFactory Menu => GetFactory<IMenu>() as IMenuFactory;
 
-        private static ThreadLocal<String> _UserHost = new ThreadLocal<String>();
+        private static readonly ThreadLocal<String> _UserHost = new ThreadLocal<String>();
         /// <summary>用户主机</summary>
         public static String UserHost { get => _UserHost.Value; set => _UserHost.Value = value; }
         #endregion
@@ -118,12 +110,12 @@ namespace XCode.Membership
         /// <summary>根据用户编号查找</summary>
         /// <param name="userid"></param>
         /// <returns></returns>
-        public virtual IManageUser FindByID(Object userid) => UserX.FindByID((userid + "").ToInt(-1));
+        public virtual IManageUser FindByID(Object userid) => Membership.User.FindByID((userid + "").ToInt(-1));
 
         /// <summary>根据用户帐号查找</summary>
         /// <param name="name"></param>
         /// <returns></returns>
-        public virtual IManageUser FindByName(String name) => UserX.FindByName(name);
+        public virtual IManageUser FindByName(String name) => Membership.User.FindByName(name);
 
         /// <summary>登录</summary>
         /// <param name="name"></param>
@@ -132,7 +124,7 @@ namespace XCode.Membership
         /// <returns></returns>
         public virtual IManageUser Login(String name, String password, Boolean rememberme)
         {
-            var user = UserX.Login(name, password, rememberme);
+            var user = Membership.User.Login(name, password, rememberme);
 
             Current = user;
 
@@ -144,10 +136,7 @@ namespace XCode.Membership
         }
 
         /// <summary>注销</summary>
-        public virtual void Logout()
-        {
-            Current = null;
-        }
+        public virtual void Logout() => Current = null;
 
         /// <summary>注册用户</summary>
         /// <param name="name">用户名</param>
@@ -157,7 +146,7 @@ namespace XCode.Membership
         /// <returns></returns>
         public virtual IManageUser Register(String name, String password, Int32 roleid, Boolean enable)
         {
-            var user = new UserX
+            var user = new User
             {
                 Name = name,
                 Password = password,
@@ -170,7 +159,6 @@ namespace XCode.Membership
             return user;
         }
 
-
         /// <summary>获取服务</summary>
         /// <typeparam name="TService"></typeparam>
         /// <returns></returns>
@@ -179,29 +167,19 @@ namespace XCode.Membership
         /// <summary>获取服务</summary>
         /// <param name="serviceType"></param>
         /// <returns></returns>
-        public virtual Object GetService(Type serviceType) => XCodeService.Container.Resolve(serviceType);
+        public virtual Object GetService(Type serviceType) => null;
         #endregion
 
         #region 实体类扩展
+        private static readonly IDictionary<Type, IEntityFactory> _factories = new NullableDictionary<Type, IEntityFactory>();
+        private static void Register<TIEntity>(IEntityFactory factory) => _factories[typeof(TIEntity)] = factory;
+
         /// <summary>根据实体类接口获取实体工厂</summary>
         /// <typeparam name="TIEntity"></typeparam>
         /// <returns></returns>
-        internal static IEntityOperate GetFactory<TIEntity>()
-        {
-            var container = XCodeService.Container;
-            var type = container.ResolveType<TIEntity>();
-            if (type == null) return null;
+        internal static IEntityFactory GetFactory<TIEntity>() => _factories[typeof(TIEntity)];
 
-            return EntityFactory.CreateOperate(type);
-        }
-
-        internal static T Get<T>()
-        {
-            var eop = GetFactory<T>();
-            if (eop == null) return default(T);
-
-            return (T)eop.Default;
-        }
+        internal static T Get<T>() => (T)GetFactory<T>()?.Default;
         #endregion
     }
 }

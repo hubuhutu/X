@@ -17,8 +17,11 @@ namespace NewLife.Messaging
         /// <summary>获取长度的委托</summary>
         public Func<Packet, Int32> GetLength { get; set; }
 
+        /// <summary>长度的偏移量，截取数据包时加上，否则将会漏掉长度之间的数据包，如MQTT</summary>
+        public Int32 Offset { get; set; }
+
         /// <summary>最后一次解包成功，而不是最后一次接收</summary>
-        public DateTime Last { get; set; } = TimerX.Now;
+        public DateTime Last { get; set; } = DateTime.Now;
 
         /// <summary>缓存有效期。超过该时间后仍未匹配数据包的缓存数据将被抛弃</summary>
         public Int32 Expire { get; set; } = 5_000;
@@ -50,9 +53,9 @@ namespace NewLife.Messaging
                     if (len <= 0 || len > pk2.Total) break;
 
                     // 根据计算得到的长度，重新设置数据片正确长度
-                    pk2.Set(pk2.Data, pk2.Offset, len);
+                    pk2.Set(pk2.Data, pk2.Offset, Offset + len);
                     list.Add(pk2);
-                    idx += len;
+                    idx += Offset + len;
                 }
                 // 如果没有剩余，可以返回
                 if (idx == pk.Total) return list.ToArray();
@@ -85,10 +88,10 @@ namespace NewLife.Messaging
                     if (len <= 0 || len > pk2.Total) break;
 
                     // 根据计算得到的长度，重新设置数据片正确长度
-                    pk2.Set(pk2.Data, pk2.Offset, len);
+                    pk2.Set(pk2.Data, pk2.Offset, Offset + len);
                     list.Add(pk2);
 
-                    ms.Seek(len, SeekOrigin.Current);
+                    ms.Seek(Offset + len, SeekOrigin.Current);
                 }
 
                 // 如果读完了数据，需要重置缓冲区
@@ -112,7 +115,7 @@ namespace NewLife.Messaging
             if (ms == null) Stream = ms = new MemoryStream();
 
             // 超过该时间后按废弃数据处理
-            var now = TimerX.Now;
+            var now = DateTime.Now;
             if (ms.Length > ms.Position && Last.AddMilliseconds(Expire) < now && (MaxCache <= 0 || MaxCache <= ms.Length))
             {
                 if (XTrace.Debug) XTrace.Log.Debug("数据包编码器放弃数据 {0:n0}，Last={1}，MaxCache={2:n0}", ms.Length, Last, MaxCache);

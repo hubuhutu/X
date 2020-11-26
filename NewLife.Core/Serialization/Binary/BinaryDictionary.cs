@@ -23,10 +23,9 @@ namespace NewLife.Serialization
         {
             if (!type.As<IDictionary>() && !(value is IDictionary)) return false;
 
-            var dic = value as IDictionary;
 
             // 先写入长度
-            if (dic == null || dic.Count == 0)
+            if (value is not IDictionary dic || dic.Count == 0)
             {
                 Host.WriteSize(0);
                 return true;
@@ -54,7 +53,7 @@ namespace NewLife.Serialization
 
             // 子元素类型
             var gs = type.GetGenericArguments();
-            if (gs.Length != 2) throw new NotSupportedException("字典类型仅支持 {0}".F(typeof(Dictionary<,>).FullName));
+            if (gs.Length != 2) throw new NotSupportedException($"字典类型仅支持 {typeof(Dictionary<,>).FullName}");
 
             var keyType = gs[0];
             var valType = gs[1];

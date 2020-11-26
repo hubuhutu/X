@@ -62,6 +62,15 @@ namespace NewLife.Serialization
         public JsonParser(String json) => _json = json;
 
         /// <summary>解码</summary>
+        /// <param name="json"></param>
+        /// <returns></returns>
+        public static IDictionary<String, Object> Decode(String json)
+        {
+            var parser = new JsonParser(json);
+            return parser.ParseValue() as IDictionary<String, Object>;
+        }
+
+        /// <summary>解码</summary>
         /// <returns></returns>
         public Object Decode() => ParseValue();
 
@@ -399,7 +408,10 @@ namespace NewLife.Serialization
                 return Double.Parse(s, NumberFormatInfo.InvariantInfo);
             }
 
-            return CreateLong(out var num, _json, startIndex, index - startIndex);
+            var m = CreateLong(out _, _json, startIndex, index - startIndex);
+            if (m < Int32.MaxValue && m > Int32.MinValue) return (Int32)m;
+
+            return m;
         }
 
         private Token LookAhead()
